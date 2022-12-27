@@ -1,0 +1,167 @@
+---
+title: "Who is present without speaking?"
+output: html_notebook
+author: baj
+---
+
+# Defining who is present but does not speak
+
+We can find out who is present without speaking by using the stage-directions. 
+
+We import the necessary R packages before we start.
+
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+#library(xslt)
+library(readxl)
+library(tidytext)
+```
+
+We also need to load the functions created for this project. This is done by `source`-ing them.
+
+```{r}
+source(here("src", "p017-functions.R"))
+source(here("src", "present_without_speech.R"))
+```
+
+# Read play
+
+(Look at read-plays.Rmd for help)
+
+In this example I use "Barselstuen_mod_nc.page"
+You can choose any play you would like to. Create a "test-data" folder in your project directory, and copy the play here.
+Edit the file below to the JSONL-file of the play you want. Simply load it into the 'my_file' variable
+
+```{r}
+my_file <- "Mascarade_mod.jsonl"
+# Convert all page files in the specified folder to jsonl
+# convert_TEI_to_JSONL(here("test-data")) 
+# Read the specified play from the jsonl file
+play <- read_play_jsonl(here("test-data", my_file))
+play # Show the table for the play
+
+# Remember to load in the excel sheet of variations of the names of characters.
+# Read in the excel sheet
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+# Use the excel sheet to gather and fuse variations of character-names
+play %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct -> play
+```
+
+The variable 'play' is now the play in question. This way, you can just change that and rerun all the sections below, without having to change them.
+
+# Find speakers
+
+Find all designated speakers
+
+```{r}
+(play %>%
+  filter(!is.na(speaker)) %>% 
+  count(speaker) %>%
+  # mutate(speaker = str_to_lower(speaker)) %>%
+  select(speaker) -> speakers)
+```
+
+# Find all stage directions
+
+Stage directions exist on two levels, preceded by either <stage> or by <speaker_stage> in the JSONL-files.
+
+```{r}
+
+# These are the people who are directly mentioned in the <stage> tokens
+(play %>% 
+  filter(!is.na(stage)) %>%
+  filter(!startsWith(stage, "("))  %>% 
+  unnest_tokens(word, stage, drop=FALSE, token="regex", pattern = ", *") %>% # Tokenize <stage>
+  select(act, scene, index, word) %>% 
+  distinct() -> explicit_stage_tokens)
+  
+# These are the the actors who are implicitly mentioned in <stage> tokens
+(play %>% 
+  filter(!is.na(stage)) %>%
+  filter(startsWith(stage, "("))  %>% 
+  unnest_tokens(word, stage) %>% # Tokenize <stage>
+  select(act, scene, index, word) %>% 
+  distinct() -> implicit_stage_tokens)
+  
+# These are the the actors who are implicitly mentioned in <speaker_stage> tokens
+(play %>% 
+  unnest_tokens(word, speaker_stage) %>% # Tokenize <speaker_stage>
+  filter(!is.na(word)) %>%
+  select(act, scene, index, word) -> speaker_stage_tokens)
+```
+
+# Search for speakers in the stage directions
+
+```{r}
+(explicit_stage_tokens %>%
+  semi_join(speakers, by = c("word" = "speaker")) -> explicit_speakers_in_stage)
+
+(implicit_stage_tokens %>%
+  semi_join(speakers, by = c("word" = "speaker")) -> implicit_speakers_in_stage)
+
+(speaker_stage_tokens %>%
+  semi_join(speakers, by = c("word" = "speaker")) -> speakers_in_speaker_stage)
+
+
+(explicit_speakers_in_stage %>%
+    full_join(implicit_speakers_in_stage) %>% 
+    full_join(speakers_in_speaker_stage) -> all_speakers_in_stage)
+
+```
+
+The output we get here must mean that we are finding 101 places where a speaker is mentioned in a line of stage directions. That is, considering only the list of all speakers that we know are in the play.
+
+# Remove characters that are actually speaking
+
+```{r}
+         
+## Distinct speakers in each scene in each act   
+(play %>% 
+  filter(!is.na(speaker)) %>%
+  select(act, scene, speaker) %>%
+  mutate(speaker = str_to_lower(speaker)) %>%
+  distinct() -> distinct_speakers)
+
+## Filter out speakers from words grouped by act and scene
+all_speakers_in_stage %>%
+  anti_join(distinct_speakers, by=c("act"="act", "scene"="scene", "word"="speaker")) %>% 
+  distinct()
+
+```
+
+Now we see that there are 18 instances where a character is mentioned in the stage directions while that character is not speaking in the scene.
+
+But is it reliable?
+
+In act 2, scene 1, we find: <speaker>En pige <stage>(med en tallerken)</stage></speaker>. However, our algorithm cannot detect that "pigen" in <stage> is exactly the same as "En pige" in <speaker>, who is speaking... We have an error because it is counting the girl twice.
+
+We have tested this on "Barselstuen", since we know that in this play, we need to find Corfitz lying under the bed (present but not speaking) in act 2, scene 2 - and we can! However, it is necessary go through the findings manually so as to sort out instances of the sort of "en pige" and "pigen", mentioned before.
+
+If we want to use this in the plot, we should make a function of all of it.
+
+We might then also try the function on another play, and maybe get a different result?
+
+# Let's test the function
+
+```{r}
+# Read the play in again to make it work
+play <- read_play_jsonl(here("test-data", my_file))
+present_without_speech(play)
+```
+
+The function seems to work, so we can add it to the visualization of the network. 
+

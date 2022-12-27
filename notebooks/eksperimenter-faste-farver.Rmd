@@ -1,0 +1,424 @@
+---
+title: "Exsperimenter med faste farver"
+output: html_notebook
+author: pmd
+date: 2021-06-07
+---
+
+# Opgaven
+
+-   Stykkerne skal have samme farvekoder -- det er næsten umuligt at danne sig et overblik ellers. Vi har lavet et excel-ark. Det er uploaded til Github (håber jeg!!), og er også vedhæftet her (Komedietitler.xlsx).
+
+-   Karaktererne ligeså. Vi arbejder på dette og listen kommer snarest.
+
+# Indledning
+
+## Indlæse pakker
+
+Først indlæses [Tidyverse](https://www.tidyverse.org) og alt andet nødvendigt
+
+```{r}
+library("tidyverse")
+
+library(here)
+library(ndjson)
+library(xslt)
+library(fs)
+library(ggplot2)
+library(readxl)
+library(tidytext)
+library(readr)  # for read_csv()
+library(purrr)  # for map(), reduce()
+
+source(here("src/p017-functions.R"))
+```
+
+## Indlæs stykkerne
+
+```{r}
+read_plays_jsonl(here("test-data")) %>% select(filename, everything()) -> plays
+```
+
+## Indlæs variant-regnearket
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+     unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+```
+
+## Mellemregninger
+
+### kombiner varianter og stykker
+
+```{r}
+plays %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  distinct -> plays
+```
+
+Vi har nu
+
+```{r}
+plays
+```
+
+### Opret hjælpe datarammer
+
+```{r}
+# count words in "spoke"
+plays %>%
+  # remove rows that are not dialogue and empty speakers
+  filter(!is.na(spoke), speaker != "") %>%
+  
+  # select only the columns, that we are interested in
+  select(speaker, title, year, spoke) %>%
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>%
+  # remove the spoken words
+  select(-spoke) %>%
+  
+  # group by title and speaker
+  group_by(title, year, speaker) %>%
+  
+  # Sum the words spoken by each speaker in each play
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), title, year) %>%
+  ##    ungroup() %>%
+  distinct() -> summary
+
+summary %>%
+    ungroup(speaker) %>%
+    summarise(words_play = sum(words)) -> totals
+
+summary %>%
+  full_join(totals) %>%
+  summarise(
+    freq = words / words_play,
+    speaker,
+    title,
+    year,
+    words,
+    words_play) %>%
+  ungroup() -> summary
+```
+
+```{r}
+summary %>%
+    ## filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>% 
+    mutate(title_fct2 = str_c(title," ", year)) -> summary_with_yeartitle
+
+summary_with_yeartitle %>%
+    arrange(year) %>% 
+    distinct(title_fct2) %>% 
+    pull(title_fct2) -> factor_levels_2
+
+#factor_levels_2
+
+summary_with_yeartitle %>%
+    mutate(title_fct2 = factor(title_fct2, factor_levels_2)) -> summary_fct2
+```
+
+# Faste farver for skikkelser
+
+## Hvor meget siger Jeromimus og Leander?
+
+Som et eksempel, vil jeg illustrere hvor meget Jeronimus og Leander siger
+
+Vi vælger disse farver for de to skikkelser
+
+```{r}
+rolle_farver <- c(
+  "jeronimus" = "orange",
+  "leander" = "steelblue",
+  "leonora" = "red"
+)
+```
+
+Med disse farver, kan vi nu lave illustrationen
+
+```{r}
+summary_fct2 %>%
+  filter(speaker %in%   c("jeronimus", "leander")) %>%
+  ggplot(aes(fill = speaker, y = 100*freq, x = title_fct2)) +
+    geom_bar(stat="identity") +
+  theme(legend.position="bottom") +
+  labs(
+    title = "Fordeling af talte ord over år mellem få gennemgående\nkarakterer",
+    ## subtitle = toupper("TEST"),
+    caption = "Kilde: DSL"
+  ) +
+  scale_fill_manual(values = rolle_farver) +
+  scale_y_continuous(limits = c(0,100), breaks = c(0,50,100)) +
+  xlab("Skuespil") +
+  ylab("Procent sagte ord") +
+  coord_flip()
+```
+
+Vi kan nu lave en anden sammenligning mellem fx Leonora og Leander, hvor Leander har samme farve som herover (Steel Blue).
+
+```{r}
+summary_fct2 %>%
+  filter(speaker %in%   c("leonora", "leander")) %>%
+  ggplot(aes(fill = speaker, y = 100*freq, x = title_fct2)) +
+    geom_bar(stat="identity") +
+  theme(legend.position="bottom") +
+  labs(
+    title = "Fordeling af talte ord over år mellem få gennemgående\nkarakterer",
+    ## subtitle = toupper("TEST"),
+    caption = "Kilde: DSL"
+  ) +
+  scale_fill_manual(values = rolle_farver) +
+  scale_y_continuous(limits = c(0,100), breaks = c(0,50,100)) +
+  xlab("Skuespil") +
+  ylab("Procent sagte ord") +
+  coord_flip()
+```
+
+# Faste farver for skuespil
+
+Hvilken illustration vil være fin til at illustrere dette?
+
+Fra Ulla:
+
+> Ang. komediefarver, så er det i visualisering af ord sagt 2 (se slide 16 og 15), hvor det er helt umuligt at sammenligne graferne på tværs, når stykkerne har forskellige farver – den første røde farve dækker fx over 5 forskellige stykker på slide 16 med de seks karakterers optrædener over tid.
+
+## Eksempel af visualiseringer af ord sagt
+
+Det her følgende eksempel er taget fra `visualiseringer-ord-sagt2.Rmd`. Først skal der defineres en hjælpefunktion. Denne funktion er dog afhængig af den globale variabel `new_summary`. (Bmrk.: jeg tager ikek farvekode med)
+
+```{r}
+# count words in "spoke"
+(plays %>% 
+  # remove rows that are not dialogue and empty speakers
+  filter(!is.na(spoke), speaker != "") %>%
+  
+  # select only the columns, that we are interested in
+  select(speaker, title, year, spoke) %>% 
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  # remove the spoken words
+  select(-spoke) %>%
+  
+  # group by title and speaker
+  group_by(title, year, speaker) %>% 
+
+  # Sum the words spoken by each speaker in each play
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), title, year) %>%
+    distinct() -> my_summary
+)
+   # Calculate %
+(my_summary %>%
+    ungroup(speaker) %>%
+    summarise(words_play = sum(words)) -> totals)
+   
+(my_summary %>%
+  full_join(totals) %>%
+  summarise(freq = words / words_play, speaker, title, year, words, words_play) ->
+    new_summary)
+```
+
+
+```{r}
+character_plot <- function(character_name) {
+  new_summary %>% 
+  filter(speaker == character_name) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = title, y = freq, x = title)) + #, colour = farvekode
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Procent talte ord over år og komedier",
+      subtitle = toupper(character_name),
+      caption = "Kilde: DSL"
+    ) +
+  xlab("year") +
+  ylab("Procent sagte ord") +
+  facet_wrap(~year, ncol=nrow(new_summary), switch="x") +
+  theme(axis.text.x=element_blank())
+}
+```
+
+### Herefter kan vi visualisere, hvor meget Pernille siger
+
+```{r}
+character_plot ("pernille")
+```
+
+### Dette kan sammenlignes med hvor meget Leonora siger
+
+```{r}
+character_plot ("leonora")
+```
+
+Udfordringen ligger nu at få stykkerne til at have de samme farver. 
+
+Jeg tænker at løse dette ved at lave en farvepalette, som indholder en farve pr. stykke og så bruge den hver gang.
+
+### Faste farver
+
+Ved roller, benytter jeg 
+
+```{r, eval=FALSE}
+rolle_farver <- c(
+  "jeronimus" = "orange",
+  "leander" = "steelblue",
+  "leonora" = "red"
+)
+```
+
+```{r}
+typeof(rolle_farver)
+```
+
+```{r}
+rolle_farver[1]
+```
+```{r}
+typeof(.Last.value)
+```
+
+
+og i selve ggplot kommandoen: `scale_fill_manual(values = rolle_farver)`. Dvs. jeg skal lave en liste, hvor jeg sammenfletter disse 33 skuespiltitler
+
+
+```{r}
+plays %>% select(title) %>% distinct(title) %>% pull(title)
+```
+
+med 33 forskellige farver
+
+```{r}
+qualitative_hcl(33, palette = "Dark 3")
+```
+### Lær at flette lister i R
+
+```{r}
+c( "a" = "Q", "b" = "X")
+```
+
+```{r}
+x <- c("n1", "n2", "n2")
+y <- c("v1", "v2", "v3")
+```
+
+```{r}
+names(y) = x
+```
+
+```{r}
+y
+```
+
+Heúrēka!
+
+### visualiser med fast farvepalette
+
+Definer den faste palette. Jeg har arbitrært valgt "Dark 3".
+
+```{r}
+skuespil_titler <- plays %>% select(title) %>% distinct(title) %>% pull(title)
+skuespil_farver <- qualitative_hcl(33, palette = "Dark 3")
+names(skuespil_farver) = skuespil_titler
+skuespil_farver
+```
+Jeg laver nu en ny `character_plot`
+
+
+```{r}
+character_plot_with_color <- function(character_name, skuespil_farver, skuespil) {
+  skuespil %>% 
+  filter(speaker == character_name) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = title, y = freq, x = title)) + #, colour = farvekode
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Procent talte ord over år og komedier",
+      subtitle = toupper(character_name),
+      caption = "Kilde: DSL"
+    ) +
+    scale_fill_manual(values = skuespil_farver) +
+    scale_y_continuous(limits = c(0,0.4), breaks = c(0,0.1,0.2,0.3,0.4)) +
+    xlab("year") +
+    ylab("Procent sagte ord") +
+    facet_wrap(~year, ncol=nrow(new_summary), switch="x") +
+    theme(axis.text.x=element_blank())
+}
+```
+
+```{r}
+library(patchwork)
+p1 <- character_plot_with_color ("leonora", skuespil_farver, new_summary)
+p2 <- character_plot_with_color ("pernille", skuespil_farver, new_summary)
+p1 / p2
+```
+
+```{r}
+ggsave("farve-eksperiment-leonora-pernille.pdf",
+  width = 210, 
+  height = 297, 
+  units = "mm")
+```
+
+# Indlæsning af farvekoder fra fil
+
+
+
+## Farvekoder for skuespil
+
+```{r}
+komedietitler <- read_xlsx(here("Komedietitler.xlsx"))
+```
+
+```{r}
+komedietitler %>% glimpse()
+```
+
+```{r}
+komedietitler %>% select(farvekode) %>% distinct(farvekode) %>% pull(farvekode)
+```
+
+
+# Lær om farvepaletter
+
+```{r}
+library("colorspace")
+```
+
+```{r}
+hcl_palettes(plot = TRUE)
+```
+```{r}
+ggsave(hcl_palettes(plot = TRUE),"colors.pdf", 
+       width = 210,
+       height = 297,
+       unit = "mm")
+```
+
+```{r}
+qualitative_hcl(36, palette = "Dark 3")
+```
+
+
+
+```{r}
+hcl_palettes(type = "Qualitative", n = 36, palette = "Dark 3", plot = TRUE)
+```
+
+```{r}
+hcl_palettes(type = "Qualitative", n = 36, palette = "Harmonic", plot = TRUE)
+```
+
+```{r}
+hcl_palettes(type = "Sequential", n = 36, palette = "Inferno", plot = TRUE)
+```
+

@@ -1,0 +1,208 @@
+---
+title: "Brug af et Excel regneark til navnevarianter"
+output: html_notebook
+author: pmd
+date: 2021-03-01
+---
+
+Denne notebook illustrerer, hvordan man kan bruge `Rolleliste.xlsx` til håndtering af flere varianter af samme navn. Dvs. koden her i skal ikke producere andet end viden i læserens hoved om at bruge denne koncept. I afsnittet Anvendelse i slutningen af denne notebook, er kort vist hvordan man kan bruge dette i praksis.
+
+Først indlæser vi de nødvendige R pakker
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(here)
+library(ndjson)
+library(fs)
+library(tidytext)
+```
+
+Så indlæser vi de projektspecifikke R funktioner
+
+```{r}
+source(here("src", "p017-functions.R"))
+```
+
+# Indlæs Excelarket
+
+Det antages at Excelarket ligger i projektroden. Projektroden er `r here()`.
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx"))
+```
+
+Excelarket består af en enkelt tabel med tre kolonner: 
+
+ * Filnavn: Navnet på den fil, som indeholder det relevante stykke
+ * Karakter: Det navn som skal anvendes i stedet for alle varianterne
+ * En kommaadskilt liste over alle varianter af Karakter.
+
+```{r}
+variants
+```
+
+## Transform the alias string to a R list
+
+For at kunne anvende dette i R, skal vi transforme denne tabel over varianter. Ud over at splitte listen over kommaadskilte varianter til en variant pr. række, ændrer vi også alle store bogstaver til små bogstaver.
+
+Samlet ser koden til at indlæse og transformere Excel således ud:
+
+```{r}
+(variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+   mutate(
+     Karakter = tolower(Karakter),
+     variant = tolower(variant)))
+```
+
+# Load test plays
+
+For nu at illustrere hvordan denne liste over navnevarianter kan bruges, indlæses et par skuespil.
+
+```{r}
+read_play_jsonl(here("test-data", "Mascarade_mod.jsonl")) -> play1
+read_play_jsonl(here("test-data", "GertWestphaler1724_mod.jsonl")) -> play2
+read_play_jsonl(here("test-data", "Barselstuen_mod.jsonl")) -> play3
+
+```
+
+For dette eksempels skyld, nøjes vi med at se på 3 stykker.
+
+Hvem siger mest i disse stykker?
+
+```{r}
+play1 %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+
+play2 %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+
+play3 %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+Nu ved vi at der findes forskellige variationer af "barselsskvinden", men hvor mange
+
+```{r}
+play3 %>% 
+  filter(str_starts(tolower(speaker), "bar")) %>% count(speaker)
+```
+
+Vi ved dog også at i Excelarket er der disse variationer
+
+```{r}
+variants %>% 
+  filter(str_starts(variant, "bar"))
+```
+Så vi forventer ikke en perfekt oprydning.
+
+# Tælle forskellige varianter som en
+
+I ren R koder, ser sammentællingen således ud
+
+```{r}
+play3 %>% 
+  mutate(
+    speaker = if_else(
+      speaker %in% c(
+        "Barselskonen",
+        "Barselskvinden",
+        "Barselsqvinde"),
+      "Barselskvinden",
+      speaker)
+    ) %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+## Benyt excelark til at samle varianter
+
+Nu vil vi i stedet benytte informationerne i Excelarket, som vi har læst ind her over. Vi sammenfletter så `variants` tabellen med selve stykket således:
+
+```{r}
+play3 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("speaker"="variant")) %>% 
+  filter(str_starts(tolower(Karakter), "bar") | str_starts(speaker, "bar")) %>% 
+  count(speaker, Karakter) %>% 
+  arrange(desc(n))
+```
+Her over kan vi se algoritmen arbejde, da den har fundet at "barselskonen" er en variant af "barselskvinden". Dvs. eftefølgende vil vi ikke bruge værdien i `speaker` men den i `Karakter`. Dette gør vi ved at erstatte indholdet af `speaker` med indholdet i `Karakter` i de tilfælde hvor `Karakter` er forskellige fra `NA`. I R ser det således ud:
+
+```
+mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker))
+```
+
+Samlet bliver dette til
+
+```{r}
+play3 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn","speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>% 
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+"barselskonen" og er nu erstattet af "barselskvinden", men ikke "barselsqvinde".
+
+# Flere eksempler
+
+```{r}
+play1 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn","speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>% 
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+"play1" i eksemplet er maskerade, hvor "Leander på knæ" gerne skulle blive til "leander".
+
+
+```{r}
+play2 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn","speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>% 
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+"play2" i eksemplet er GertWestphaler1724. Her er der gået noget galt med "mester gert" og "mester gert westphaler". Der er fordi vi har glemt filnavnet, så den konverterer både for GertWestphaler1723 og GertWestphaler1724. Det fikser jeg også lige.
+
+# Anvendelse
+
+Skal denne kode bruges i en analyse, gør man følgende:
+
+ ½. Husk at vi skal bruge et bibliotek
+```
+library(readxl)
+```
+ 
+
+ 1. indlæs Excelarket
+
+```
+  variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+```
+
+ 2. Tilføj denne stump kode til alle analyser, der vil sammenlægge navnevarianter:
+
+```
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct
+```

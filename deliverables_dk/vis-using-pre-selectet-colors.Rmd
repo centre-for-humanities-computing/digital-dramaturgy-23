@@ -1,0 +1,208 @@
+---
+title: "Visualisering af antal talte ord med brug af en fast farvepalette"
+author: "pmd"
+date: '2021-06-24'
+output:
+  html_notebook: default
+---
+
+Indlæst de nødvendige biblioteket
+
+```{r message=FALSE, warning=FALSE}
+library("tidyverse")
+
+library(here)
+library(ndjson)
+#library(xslt)
+library(fs)
+library(ggplot2)
+library(readxl)
+library(tidytext)
+library(readr)  # for read_csv()
+library(purrr)  # for map(), reduce()
+
+# husk:
+#install.packages("colorspace")
+library(colorspace)
+
+source(here("src/p017-functions.R"))
+```
+
+I dette eksempel bruger jeg `colorspace` pakken fra R, der kan der læses mere om [colorspace: A Toolbox for Manipulating and Assessing Colors and Palettes](https://cran.r-project.org/web/packages/colorspace/vignettes/colorspace.html).
+
+Denne pakke kan levere farver inden for an angivet farvepalette. De mulige paletter indenfor HCL farvesystemet[^1] vises her
+
+[^1]: HCL står for hue, chroma og luminance. Se mere på [HCL colorspace](https://en.wikipedia.org/wiki/HCL_color_space)
+
+
+```{r}
+hcl_palettes(plot = TRUE)
+```
+
+I vores tilfælde har vi brug for et antal forskellige farver. Vi kan så vælge indenfor hvilken palette, disse farver skal tages. Hvis vi fx ønsker fire forskellgie farver fra Dynamic paletten, gøres det således
+
+```{r}
+qualitative_hcl(4, palette = "Dynamic")
+```
+
+Vi kan sågar se hvor disse farver er placeret i et farvesystem
+
+```{r}
+hclplot(qualitative_hcl(4, palette = "Dynamic"))
+```
+
+Vi har 33 skuespil, så vi ved allerede nu, at det bliver en udfordring at finde så mange farver der kan skelnes fra hinanden.
+
+Lad os dog starte med at indlæse alle skuespillene og transformere dem over på den velkendte form
+
+# Indlæs skuespil og gør dem klar til visualiseringer
+
+Indlæs skuespillene
+
+```{r}
+read_plays_jsonl(here("test-data")) %>% select(filename, everything()) -> plays
+```
+
+Indlæs variant rgnearket
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+  mutate(
+    Karakter = tolower(Karakter),
+    variant = tolower(variant)
+  )
+```
+
+Kombiner skuespil og variantinformation
+
+```{r}
+plays %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  distinct -> plays
+```
+
+Opret en mellemregning
+
+```{r}
+# count words in "spoke"
+plays %>%
+  # remove rows that are not dialogue and empty speakers
+  filter(!is.na(spoke), speaker != "") %>%
+  
+  # select only the columns, that we are interested in
+  select(speaker, title, year, spoke) %>%
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>%
+  # remove the spoken words
+  select(-spoke) %>%
+  
+  # group by title and speaker
+  group_by(title, year, speaker) %>%
+  
+  # Sum the words spoken by each speaker in each play
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), title, year) %>%
+  ##    ungroup() %>%
+  distinct() -> summary
+
+summary %>%
+    ungroup(speaker) %>%
+    summarise(words_play = sum(words)) -> totals
+
+summary %>%
+  full_join(totals) %>%
+  summarise(
+    freq = words / words_play,
+    speaker,
+    title,
+    year,
+    words,
+    words_play) %>%
+  ungroup() -> summary
+```
+
+
+# Find farver
+
+```{r}
+skuespil_titler <- plays %>% select(title) %>% distinct(title) %>% pull(title)
+```
+
+Hvor mange skuespil?
+
+```{r}
+skuespil_titler %>% length()
+```
+
+Lad os vælge 33 farver. Jeg har 34, så jeg retter lige!
+
+```{r}
+skuespil_farver <- qualitative_hcl(35, palette = "Dynamic")
+```
+
+Lad os se, hvordan de 34 farver placerer sig i et farverum
+
+```{r}
+hclplot(skuespil_farver)
+```
+
+Aha, en cirkel — det ved jeg ikke nok om til at kunne kommenterer det...
+
+Vi kan nu lave en liste af par af skuespil titel og skuespil farve
+
+```{r}
+names(skuespil_farver) <- skuespil_titler
+```
+
+Lad os se det første par
+
+```{r}
+skuespil_farver[1]
+```
+
+# Implementation af `character_plot` med faste farver
+
+
+```{r}
+character_plot_with_color <- function(character_name, skuespil_farver, skuespil) {
+  skuespil %>% 
+  filter(speaker == character_name) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = title, y = freq, x = title)) + 
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Procent talte ord over år og komedier",
+      subtitle = toupper(character_name),
+      caption = "Kilde: DSL"
+    ) +
+    scale_fill_manual(values = skuespil_farver) +
+    scale_y_continuous(limits = c(0,0.4), breaks = c(0,0.1,0.2,0.3,0.4)) +
+    xlab("year") +
+    ylab("Procent sagte ord") +
+    facet_wrap(~year, ncol=nrow(skuespil), strip.position = "top") +
+    theme(axis.text.x=element_blank())
+}
+```
+
+Sagens kerne er linien ` scale_fill_manual(values = skuespil_farver) +`. Denne teknik kan benyttes i alle andre plot, hvor der anvendes farve.
+
+# Visualiser 
+
+Som et eksempel, viser jeg har hvor mange ord henholdsvis Leonora og Pernille siger, hvor skuespillenes farver meget gerne skulle kunne sammenlignes på tværs af graferne.
+
+Først Leonora:
+
+```{r}
+character_plot_with_color ("leonora", skuespil_farver, summary)
+```
+Så Pernille:
+
+```{r}
+character_plot_with_color ("pernille", skuespil_farver, summary)
+```
+

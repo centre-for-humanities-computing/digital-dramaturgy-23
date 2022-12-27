@@ -1,0 +1,206 @@
+---
+title: "Visualize the number of spoken words using a fixed palette of colors"
+author: "pmd"
+date: '2021-06-24'
+output:
+html_notebook: default
+---
+
+Import the necessary libraries
+
+```{r message=FALSE, warning=FALSE}
+library("tidyverse")
+
+library(here)
+library(ndjson)
+#library(xslt)
+library(fs)
+library(ggplot2)
+library(readxl)
+library(tidytext)
+library(readr)  # Necessary for read_csv()
+library(purrr)  # Necessary for map(), reduce()
+
+# Remember to:
+#install.packages("colorspace")
+library(colorspace)
+
+source(here("src/p017-functions.R"))
+```
+
+In this example we will use the `colorspace` package from R. You can read more about it here: [colorspace: A Toolbox for Manipulating and Assessing Colors and Palettes](https://cran.r-project.org/web/packages/colorspace/vignettes/colorspace.html).
+
+This package offers colors within a desired palette of colors. The available palettes within the HCL colorsystem[^1] are shown below. 
+
+[^1] Stands for: hue, chroma and luminance. Read more on: [HCL colorspace](https://en.wikipedia.org/wiki/HCL_color_space)
+
+
+```{r}
+hcl_palettes(plot = TRUE)
+```
+
+In our case we need a number of different colors. We may choose from within what palette we want to choose those colors. For example, if we want four different colors from within the Dynamic palette, we can do the following:
+
+```{r}
+qualitative_hcl(4, palette = "Dynamic")
+```
+
+We can even check to see where these colors are placed within the colorsystem. 
+
+```{r}
+hclplot(qualitative_hcl(4, palette = "Dynamic"))
+```
+
+We have 33 plays, so we already know that it will be a challenge to find as many distinct colors. 
+
+Nevertheless, let us start with reading in all of the plays and transforming them into the format we know by now (JSONL).
+
+# Reading in the plays and preparing them for visualization
+
+Read in the plays below.
+
+```{r}
+read_plays_jsonl(here("test-data")) %>% select(filename, everything()) -> plays
+```
+
+Read in the excel sheet of character-name variations.
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+  mutate(
+    Karakter = tolower(Karakter),
+    variant = tolower(variant)
+  )
+```
+
+Combine the plays and the information on variations of names:
+
+```{r}
+plays %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  distinct -> plays
+```
+
+Calculate words spoken in preparation for the plots
+
+```{r}
+# Count words in <spoke>
+plays %>%
+  # Remove rows that are not dialogue and empty speakers
+  filter(!is.na(spoke), speaker != "") %>%
+  
+  # Select only the columns, that we are interested in
+  select(speaker, title, year, spoke) %>%
+  
+  # Add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>%
+  # Remove the spoken words
+  select(-spoke) %>%
+  
+  # Group by title and speaker
+  group_by(title, year, speaker) %>%
+  
+  # Sum the words spoken by each speaker in each play
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), title, year) %>%
+  ##    ungroup() %>%
+  distinct() -> summary
+
+summary %>%
+    ungroup(speaker) %>%
+    summarise(words_play = sum(words)) -> totals
+
+summary %>%
+  full_join(totals) %>%
+  summarise(
+    freq = words / words_play,
+    speaker,
+    title,
+    year,
+    words,
+    words_play) %>%
+  ungroup() -> summary
+```
+
+
+# Select colors
+
+```{r}
+skuespil_titler <- plays %>% select(title) %>% distinct(title) %>% pull(title)
+```
+
+How many plays are there?
+
+```{r}
+skuespil_titler %>% length()
+```
+
+So, let us select 34 colors. 
+
+```{r}
+skuespil_farver <- qualitative_hcl(35, palette = "Dynamic")
+```
+
+Let's see how the 34 colors are placed on the palette:
+
+```{r}
+hclplot(skuespil_farver)
+```
+
+Now, we can create a list of pairs of the titles of plays and their colors:
+
+```{r}
+names(skuespil_farver) <- skuespil_titler
+```
+
+Let's inspect the first pair:
+
+```{r}
+skuespil_farver[1]
+```
+
+# Implementation of `character_plot` with fixed colors
+
+```{r}
+character_plot_with_color <- function(character_name, skuespil_farver, skuespil) {
+  skuespil %>% 
+  filter(speaker == character_name) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = title, y = freq, x = title)) + 
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Percentage of spoken words across time and comedies",
+      subtitle = toupper(character_name),
+      caption = "Source: DSL"
+    ) +
+    scale_fill_manual(values = skuespil_farver) +
+    scale_y_continuous(limits = c(0,0.4), breaks = c(0,0.1,0.2,0.3,0.4)) +
+    xlab("Year") +
+    ylab("Percentage of spoken words") +
+    facet_wrap(~year, ncol=nrow(skuespil), strip.position = "top") +
+    theme(axis.text.x=element_blank())
+}
+```
+
+The most important line of code for coloring is `scale_fill_manual(values = skuespil_farver) +`. This technique can be used in any other plot where we use color.
+
+# Visualize
+
+To give an example, we will visualize how many word Leonora and Pernille say respectively below. The colors of the plays should be the same between the plots.
+
+Let us begin with the plot for Leonora:
+
+```{r}
+character_plot_with_color ("leonora", skuespil_farver, summary)
+```
+
+Let's also try Pernille:
+
+```{r}
+character_plot_with_color ("pernille", skuespil_farver, summary)
+```
+

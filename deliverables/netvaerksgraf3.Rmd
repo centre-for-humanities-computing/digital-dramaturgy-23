@@ -1,0 +1,320 @@
+---
+title: "Network 3 with weights and character who are present but do not speak"
+author: "Bolette A. Jurik"
+date: "2/3-2021"
+output: html_notebook
+---
+
+This version also uses the functions in "graph_functions.R".
+First, we import the necessary libraries and source the functions we need.
+
+```{r, message=FALSE}
+library(here)
+library(xml2)
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+#library(xslt)
+library(tidytext)
+library(ggraph)
+library(igraph)
+library(tidygraph)
+library(readxl)
+
+source(here("src", "p017-functions.R"))
+source(here("src", "graph_functions.R"))
+source(here("src", "present_without_speech.R"))
+```
+
+Next, we load the excel sheet of all characters in the plays and variations on their names:
+
+```{r}
+(variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    ))
+```
+
+# Find the speakers and weights
+We are running this on one file at a time, loading the play we want to use into the variable "my_file".
+
+The weights we want to apply are the number of spoken words, similar to what we did in "visualisering-ord-sagt.Rmd". However, instead of counting the words of each speaker, we here count the words spoken in each scene.
+
+```{r}
+# The next line is only necessary if you do not already have the jsonl files
+# convert_TEI_to_JSONL(here("test-data"))
+
+my_file <- "GertWestphaler1724_mod.jsonl"
+# my_file <- "Mascarade_mod.jsonl"
+# my_file <- "Barselstuen_mod.jsonl"
+# my_file <- "Ulysses_mod.jsonl"
+# my_file <- "uden_hoved_og_hale_mod.jsonl"
+# my_file <- "Skibbrud_mod.jsonl"
+# my_file <- "Sganarel_mod.jsonl"
+# my_file <- "Republiqven_mod.jsonl"
+# my_file <- "Ranudo_mod.jsonl"
+# my_file <- "Plutus_mod.jsonl"
+# my_file <- "Philosophus_mod.jsonl"
+# my_file <- "Pernille_mod.jsonl"
+# my_file <- "Nytaarsprolog_mod.jsonl"
+# my_file <- "Melampe_mod.jsonl"
+# my_file <- "Ligbeg_mod.jsonl"
+# my_file <- "Kilde-Reysen_mod.jsonl"
+# my_file <- "Kandst_mod.jsonl" todo udfordring med 1. og 2. <w>rådsherreinde</w>
+# my_file <- "Juele-Stue_mod.jsonl"
+# my_file <- "JJ_Bet_1723_mod.jsonl"
+# my_file <- "Jeppe_mod.jsonl"
+# my_file <- "Jean_de_France_mod.jsonl"
+# my_file <- "Jacob_von_Tyboe_mod.jsonl"
+# my_file <- "Hexerie_mod.jsonl"
+# my_file <- "Henrick_og_Pernille_mod.jsonl"
+# my_file <- "GertWestphaler1723_mod.jsonl"
+# my_file <- "Erasmus_mod.jsonl"
+# my_file <- "Diderich_mod.jsonl"
+# my_file <- "Det_Arabiske_Pulver_mod.jsonl"
+# my_file <- "Den_Vaegelsindede_1731_mod.jsonl"
+# my_file <- "De_u-synlige_mod.jsonl"
+# my_file <- "Den_Vaegelsindede_1723_mod.jsonl"
+# my_file <- "Den_Stundesloese_mod.jsonl"
+# my_file <- "Den_Honnette_Ambition_mod.jsonl"
+# my_file <- "Den_11_Junii_mod.jsonl"
+# my_file <- "Brudgom_mod.jsonl"
+# my_file <- "Bondedreng_mod.jsonl"
+# my_file <- "Abracadabra_mod.jsonl"
+
+(read_play_jsonl(here("test-data", my_file)) -> play)
+
+# Let's fetch the title of the play and the year of publication
+play %>% 
+  select(docTitle) %>% 
+  distinct() %>%
+  pull(1,1) -> my_title
+
+play %>% 
+  select(year) %>% 
+  distinct() %>%
+  pull(1,1) -> my_year
+
+# We want to combine all variations of a name, so that we are only working with one name for each character (see "use-excel-for-name-variants.Rmd" for more details).
+# Remember to fill in the file-name.
+(play %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+      filter(!is.na(speaker), !(speaker=="")) %>%
+distinct -> play)
+
+# Let's find all speakers in the play using the function find_speakers:
+(find_speakers(play) -> distinct_speakers)
+
+# Now we find the weights for each scene
+(find_weights(play) -> scene_weights)
+```
+
+# Find nodes and edges and combine with weights
+
+Now we will find the weights for the edges. An edge will be set between two characters if they have spoken in the same scene. The weight (that is, the strength) of that edge will dependend on the number of words spoken in that scene. If two characters have spoken to each other in more than one scene, we will sum the number of words spoken in each of the scenes together, which is then the weight of the edge between these two characters.
+
+The edges are in principle undirected (or go in both directions).
+
+```{r}
+# Find the nodes using the function "speakers2nodes"
+(speakers2nodes(distinct_speakers) -> nodes_play)
+
+# Find the edges and combine edges with weights
+# When using the function, the trouble is that we discarded act and scene numbers, but we can retrieve them below again.
+
+# Create column 'speaker2' and make it equal to 'speaker' (duplicate it).
+distinct_speakers$speaker2 = distinct_speakers$speaker 
+  
+# All possible combinations (remember the data is still grouped by act-number and scene-number)
+distinct_speakers %>% 
+    expand(speaker, speaker2) %>%
+    # Remove the instances when a speaker refers to him/herself
+    filter(speaker != speaker2) -> who_speaks_to_whom
+  
+(who_speaks_to_whom  %>%
+      ungroup() %>%
+      # We remove the edge in one direction, so that we do not count the same edges twice.
+      filter(speaker < speaker2) %>% 
+      select(from = speaker, to = speaker2) %>%
+      distinct() -> edges_play)
+
+# Combine edges with weights
+(who_speaks_to_whom %>% right_join(scene_weights) -> who_speaks_to_whom_with_weights)
+  
+# Sum the weights
+(who_speaks_to_whom_with_weights  %>%
+    ungroup() %>% 
+    rename(from=speaker, to=speaker2) %>% 
+    select(from,to,words) %>% 
+    filter(!is.na(to)) %>% 
+    group_by(from,to) %>% 
+    arrange(from,to,words) %>% 
+    mutate(weight=sum(words)) %>% 
+    ungroup() %>% 
+    select(from,to,weight) %>% 
+      filter(from < to) %>% # Again, remove the edge in one direction to avoid counting it twice.
+    distinct() -> edges_weights)
+
+# When we "ungroup", "rename", "select" and "filter" we are just data-wrangling. 
+# We "group by" from, to. 
+# We "arrange" for display purposes. 
+# We "mutate" weight=sum(words) sums in each group. 
+# After that, we can "ungroup". 
+# We "select" to remove unnecessary columns. 
+# We use "distinct" to ensure that each edge only exists and is counted once.  
+
+
+```
+
+# Let's draw the first network
+
+We now draw a graph of the network with weighted edges in the following way:
+
+```{r}
+nodes_play
+edges_weights
+gr1 <- tbl_graph(nodes = nodes_play, edges = edges_weights, directed = FALSE, node_key = "speaker")
+
+(ggraph(gr1, layout = 'stress') + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker),
+                       width = weight
+                       ),
+                   alpha = .25) + 
+    geom_node_text(aes(label = speaker)) + 
+    labs(caption = paste("Netværksgraf", my_title, my_year)))
+
+ggsave(here("graphs/netvaerksgraf3", paste(my_file, ".no-arrows.no-silent-characters.stress.png")))
+
+```
+
+# Find the characters that are present but do not speak
+
+Now let us try to add the characters who are present but do not speak, putting their edges in another color.
+These edges will be directed from the character who does no speak to the one who does.
+
+```{r}
+
+(present_without_speech(play) -> present_but_silent)
+# We want to have weight on these "present_but_silent" character-edges too
+# We may do that using the weights from act_number and scene_number again
+(present_but_silent %>% left_join(scene_weights) %>%
+    distinct() -> present_but_silent_with_weights)
+
+# Combine with speakers by act and scene and rename
+(present_but_silent_with_weights %>%
+    rename(from=word, to=speaker) %>% 
+  select(from,to,words) %>% 
+  filter(!is.na(to)) %>% 
+  group_by(from,to) %>% 
+  arrange(from,to,words) %>% 
+    distinct() %>%
+  mutate(weight=sum(words)) -> tmp)
+(tmp %>% 
+  ungroup() %>% 
+  select(from,to,weight) %>% 
+  distinct() -> silent_edges_with_weights)
+
+  
+```
+
+# Draw the second network
+
+We can now combine the two sets of weighted edges (of those present and speaking, and those present but not speaking) and draw a graph in the following way:
+
+```{r}
+edges_weights$type = "speaking"
+
+silent_edges_with_weights$type = "silent"
+
+(silent_edges_with_weights %>% bind_rows(edges_weights) -> edges_combined) 
+
+nodes_play
+
+gr1 <- tbl_graph(nodes = nodes_play, edges = edges_combined, directed = TRUE, node_key = "speaker")
+
+# gr1 %>% activate(edges) # Test
+
+ggraph(gr1, layout = 'stress') + # Try different layouts here. There are various possibilities: 'stress', 'dh', 'drl', 'fr', 'gem', 'graphopt', 'kk', 'lgl', 'mds', 'randomly' and others.
+  
+    scale_edge_colour_manual(values = c("speaking" = "blue", "silent" = "red")) + # Choose your colors manually
+    
+    geom_edge_fan(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker),
+                       width = weight,
+                       colour = factor(type)),
+#                  arrow = arrow(length = unit(2, 'mm'), type = "closed"), # Add arrows
+                   alpha = .25) + 
+#    geom_node_point(aes(fill = speaker),shape = 21,size = 5) + # You might consider creating knots
+    geom_node_text(aes(label = speaker), check_overlap = TRUE) + # Try with and without
+                                                                               # check_overlap = TRUE, repel = TRUE
+    labs(caption = paste("Netværksgraf", my_title, my_year))
+
+# Save the network as a PNG-file (`mypng.png`):
+ggsave(here("graphs/netvaerksgraf3", paste(my_file, ".no-arrows.stress.check_overlap.png")))
+
+
+```
+
+# Draw a third network
+
+To have directional arrows only on the edges of characters that are present but silent, we might try creating two different graphs and then combining them.
+The trouble is that we assign arrows when drawing the graph...
+Let's try drawing the edges for the speaking characters in both directions instead.
+
+
+```{r}
+
+gr2 <- tbl_graph(nodes = nodes_play, edges = edges_weights, directed = TRUE, node_key = "speaker")
+gr3 <- tbl_graph(nodes = nodes_play, edges = silent_edges_with_weights, directed = TRUE, node_key = "speaker")
+gr4 <- gr2 %>% 
+    mutate(graph = 'reverse') %>% 
+    activate(edges) %>% 
+    reroute(from = to, to = from)
+gr4 %>% graph_join(gr3) %>% graph_join(gr2) %>%
+ggraph(layout = 'lgl') + # Try different layouts here. There are various possibilities: 'stress', 'dh', 'drl', 'fr', 'gem', 'graphopt', 'kk', 'lgl', 'mds', 'randomly' and others.
+  
+    scale_edge_colour_manual(values = c("speaking" = "blue", "silent" = "red")) + # Choose your colors manually
+    
+    geom_edge_fan(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker),
+                       width = weight,
+                       colour = factor(type)),
+#                  arrow = arrow(length = unit(2, 'mm'), type = "closed"), # Add arrows
+                   alpha = .25) + 
+#    geom_node_point(aes(fill = speaker),shape = 21,size = 5) + # You might consider creating knots
+    geom_node_text(aes(label = speaker), check_overlap = TRUE) + # Try with and without
+                                                                               # check_overlap = TRUE, repel = TRUE
+    labs(caption = paste("Netværksgraf", my_title, my_year))
+
+# Save the network as a PNG-file (`mypng.png`):
+ggsave(here("graphs/netvaerksgraf3", paste(my_file, ".lgl.check_overlap.png")))
+
+
+```
+
+# Test "create graph function"
+
+```{r}
+(create_graph(my_file))
+```
+
+The function seems to work. It will return "null", but it will save the visualization of the network as a pdf. 
+
+# Run "create graph function" on all json files in "test-data"
+
+```{r}
+# Retrieve all plays in JSONL
+json_file_list <- list.files(here("test-data"), pattern = "*.jsonl")
+
+# Draw networks for all plays
+for(i in 2:length(json_file_list)) {
+  create_graph(json_file_list[i])
+}
+```
+

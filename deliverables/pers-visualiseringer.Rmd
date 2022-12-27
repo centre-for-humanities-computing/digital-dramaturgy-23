@@ -1,0 +1,586 @@
+---
+title: "Examples of visualization"
+output: html_notebook
+author: pmd
+---
+
+Import the necessary libraries:
+
+```{r, message=FALSE}
+library(tidyverse)
+library(here)
+library(ndjson)
+library(xslt)
+library(fs)
+library(ggplot2)
+library(readxl)
+library(tidytext)
+
+require(readr)  # For read_csv()
+require(purrr)  # For map(), reduce()
+
+source(here("src/p017-functions.R"))
+```
+
+# Read in the data
+
+Read in the data of plays converted to JSONL
+
+```{r}
+read_plays_jsonl(here("test-data")) %>% select(filename, everything()) -> plays
+```
+
+## Read in the excel sheet of characters and variations of character-names
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+     unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+```
+
+Combine the plays and the excel sheet:
+
+```{r}
+plays %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  distinct -> plays
+```
+
+# Visualization
+
+Basically, we need to implement a function that does the following: `character_comparison_plot(<list of character names>, <list of character names>)`
+
+```{r}
+# Count words in "spoke"
+plays %>%
+  # Remove rows that are not dialogue and empty speakers
+  filter(!is.na(spoke), speaker != "") %>%
+  
+  # Select only the columns, that we are interested in
+  select(speaker, title, year, spoke) %>%
+  
+  # Add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>%
+  # Remove the spoken words
+  select(-spoke) %>%
+  
+  # Group by title and speaker
+  group_by(title, year, speaker) %>%
+  
+  # Sum the words spoken by each speaker in each play
+  # Lastly store the new data frame in a new reference for later use
+    summarise(words = sum(n_spoken_words), title, year) %>%
+    ##    ungroup() %>%
+  distinct() -> summary
+
+summary %>%
+    ungroup(speaker) %>%
+    summarise(words_play = sum(words)) -> totals
+
+summary %>%
+  full_join(totals) %>%
+    summarise(freq = words / words_play, speaker, title, year, words, words_play) %>%
+    ungroup() -> summary
+
+summary
+
+```
+
+## Comparison of individual characters
+
+```{r test}
+  summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) -> tmp
+  #arrange(year) %>%
+
+  # Below follow two possible ways of visualizing the comparison.
+
+  # Add year to title
+  tmp %>% mutate(title = paste(year," ",title)) %>%
+  ggplot(aes(fill = speaker, y = freq, x = title)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+      caption = "Source: DSL"
+    ) +
+  xlab("Year") +
+  ylab("Pecentage of spoken words") +
+  theme(axis.text.x=element_text(angle = -60, hjust = 0))
+
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_v1.pdf"), width=16, height=9)
+
+  # We might also use year as a facet
+  tmp %>%
+  ggplot(aes(fill = speaker, y = freq, x = title)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+      caption = "Source: DSL"
+    ) +
+  xlab("Year") +
+  ylab("Percentage of spoken words") +
+  facet_wrap(~year, scales = 'free_x', ncol=nrow(summary), switch="x") +
+  theme(axis.text.x=element_text(angle = -60, hjust = 0))
+
+    ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_v2.pdf"), width=16, height=9)
+
+```
+
+## Comparison between groups of characters
+
+```{r}
+group_1 <- c("henrik", "jeronimus", "leander")
+group_2 <- c("pernille", "leonora", "magdelone")
+
+summary %>% 
+  filter(speaker %in% c(group_1, group_2)) %>% 
+  mutate(gruppe = if_else(speaker %in% group_1, "Henrik, Jeronimus og Leander","Pernille, Leonora og Magdelone")) -> tmp2
+  #filter(speaker %in% c("henrik","pernille","leonora")) %>%
+  #arrange(year) %>%
+  
+  # Below follow two possible ways of visualizing the comparison.
+
+  # Add year to title
+  tmp2 %>% mutate(title = paste(year," ",title)) %>%
+    ggplot(aes(fill = gruppe, y = freq*100, x = title)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+      caption = "Source: DSL"
+    ) +
+  xlab("Year") +
+  ylab("Percentage of spoken words") +
+  labs(fill='Maskpair') +
+  theme(axis.text.x=element_text(angle = -60, hjust = 0))
+        ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_grupper_v1.pdf"), width=16, height=9)
+
+  # We migt also use year as a facet
+  tmp2 %>%
+    ggplot(aes(fill = gruppe, y = freq*100, x = title)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+      caption = "Source: DSL"
+    ) +
+  xlab("Year") +
+  ylab("Percentage of spoken words") +
+  labs(fill='Maskpair') +
+  facet_wrap(~year, scales = 'free_x', ncol=nrow(summary), switch="x") +
+  theme(axis.text.x=element_text(angle = -60, hjust = 0))
+        ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_grupper_v2.pdf"), width=16, height=9)
+
+
+```
+
+## Sorting by year and/or title
+
+In statistics, we work with something called a *factor*. A factor is a variable or an observation which may hold values that cannot be sorted, as numerical data can. A color, for example, cannot be sorted - yet if you take them as factors, you can assign them a sequence you want them to have.
+
+We might use factors to sort the plays by title. First, we can make a list of all titles sorted by year of publication. Then we can transform the title-column to factor variables, and assign the sequence that they had when they were sorted by year. 
+
+```{r}
+summary %>% 
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>% 
+  arrange(desc(year)) %>% # We sort the vertical axis by year (ascending)
+  distinct(title) %>% 
+  pull(title) -> factor_levels_sort_year
+
+summary %>% 
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>% 
+  distinct(title) %>% 
+  arrange(desc(title)) %>%  # We sort the vertical axis by title
+  pull(title) -> factor_levels_sort_title
+
+#summary$title_fct <- factor(summary$title, factor_levels)
+```
+
+
+## Sort by title
+
+```{r}
+summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  arrange(title) %>%
+  ggplot(aes(fill = speaker, y = freq, x = factor(title, factor_levels_sort_title))) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  facet_wrap(~year, ncol=nrow(summary), switch="x") +
+  theme(axis.text.x=element_blank()) +
+  coord_flip() # Flip the plot 90°
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_flip_v1.pdf"), width=16, height=9)
+
+```
+
+
+## Sort by year
+
+```{r}
+summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  #arrange(year) %>%
+  #mutate(title = str_c(title," ",year)) %>% 
+  ggplot(aes(fill = speaker, y = 100*freq, x = factor(title, factor_levels_sort_year))) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  facet_wrap(~year, ncol=nrow(summary), switch="x") +
+  #theme(axis.text.x=element_blank()) +
+  coord_flip()
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_flip_v2.pdf"), width=16, height=9)
+
+```
+
+## Diagram that is not divided by year
+
+First, we should make a new assignment of sequence to the factors, since we want to include years. 
+
+
+```{r}
+summary %>%
+    ## filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>% 
+    mutate(title_fct2 = str_c(title," ", year)) -> summary_with_yeartitle
+
+summary_with_yeartitle %>%
+    arrange(desc(year)) %>% 
+    distinct(title_fct2) %>% 
+    pull(title_fct2) -> factor_levels_2
+
+factor_levels_2
+
+summary_with_yeartitle %>%
+    mutate(title_fct2 = factor(title_fct2, factor_levels_2)) -> summary_fct2
+
+summary_fct2 %>% select(title_fct2)
+```
+
+```{r}
+summary_fct2 %>% 
+    ## filter(speaker %in% c("henrik","pernille","troels")) %>%
+    filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+    ggplot(aes(fill = speaker, y = 100*freq, x = title_fct2)) +
+       geom_bar(stat="identity") +
+       theme(legend.position="bottom") +
+       labs(
+           title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+           ## subtitle = toupper("TEST"),
+           caption = "Source: DSL"
+       ) +
+    scale_y_continuous(limits = c(0,100), breaks = c(0,50,100)) +
+    xlab("Play") +
+    ylab("Percentage of spoken words") +
+    coord_flip()
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_flip_v3.pdf"), width=16, height=9)
+
+```
+
+```{r}
+group_1 <- c("henrik", "jeronimus", "leander")
+group_2 <- c("pernille", "leonora", "magdelone")
+
+summary_fct2 %>%
+    filter(speaker %in% c(group_1, group_2)) %>% 
+    mutate(gruppe = if_else(speaker %in% group_1, "Henrik, Jeronimus og Leander","Pernille, Leonora og Magdelone")) %>% 
+    ## filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+    ggplot(aes(fill = gruppe, y = 100*freq, x = title_fct2)) +
+       geom_bar(stat="identity") +
+       theme(legend.position="bottom") +
+       labs(
+           title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+           ## subtitle = toupper("TEST"),
+           caption = "Source: DSL"
+       ) +
+    scale_y_continuous(limits = c(0,100), breaks = c(0,10,20,30,40,50,60,70,80,90,100)) +
+    xlab("Play") +
+    ylab("Percentage of spoken words") +
+      labs(fill='Maskpair') +
+    coord_flip()
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_flip_grupper.pdf"), width=16, height=9)
+
+```
+
+## Let's Go Crazy
+
+Below we show some examples of how to use different ggplot-themes. 
+
+First we show the silly kind of example that nevertheless illustrates the wide range of thematic possibilities.
+
+Before you can import and use the `tvthemes`, you need to install it first. You only need to do this once:
+
+
+```{r}
+#install.packages("tvthemes")
+```
+
+```{r}
+library(tvthemes)
+```
+
+```{r}
+summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  #arrange(year) %>%
+  ggplot(aes(fill = speaker, y = 100*freq, x = fct_rev(title))) +
+    geom_bar(stat="identity") +
+    theme_simpsons(
+      #title.font = "Akbar",
+      #text.font = "Akbar",
+      axis.text.size = 8) +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between characters",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  #facet_wrap(~year, ncol=nrow(summary), switch="x") +
+  #theme(axis.text.x=element_blank()) +
+  coord_flip()
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_tema_simpsons.pdf"), width=16, height=9)
+
+```
+
+## More usefu examples
+
+In the following examples, we start by saving the plot to the variable `p`. After that, it is easy to plot first without sorting by year and thereafter sorting by year.
+
+
+```{r}
+summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = speaker, y = 100*freq, x = factor(title, factor_levels_sort_title))) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between characters",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  scale_fill_brewer(type = "seq", palette = "Greens") -> p # Choose a green palette
+
+p + coord_flip() +
+  facet_wrap(~year, ncol=nrow(summary), strip.position="top") 
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_greens.pdf"), width=16, height=9)
+
+```
+
+## Viridis
+
+Another package. Again, we only need to install this package once the first time we run this notebook. After that, we can simply import it.
+
+```{r}
+#install.packages("viridis")
+```
+
+```{r}
+library(viridis)
+```
+
+```{r}
+summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = speaker, y = 100*freq, x = factor(title, factor_levels_sort_year))) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between characters",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  scale_fill_viridis(discrete = TRUE) +
+  coord_flip() -> p
+
+p
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_viridis_v1.pdf"), width=16, height=9)
+
+p + facet_wrap(~year, ncol=nrow(summary), strip.position="top")
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_viridis_v2.pdf"), width=16, height=9)
+
+```
+
+## Economist
+
+Another. Again, install `ggthemes` only the first time you run this notebook.
+
+```{r}
+#install.packages("ggthemes")
+```
+
+```{r}
+library(ggthemes)
+```
+
+```{r}
+summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = speaker, y = 100*freq, x = factor(title, factor_levels_sort_year))) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between characters",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  #scale_fill_brewer(palette = "Greens") +
+  theme_economist() + scale_fill_economist() +
+  coord_flip() -> p
+
+p
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_tema_economist_v1.pdf"), width=16, height=9)
+
+p + facet_wrap(~year, ncol=nrow(summary), strip.position="top")
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_tema_economist_v2.pdf"), width=16, height=9)
+
+```
+
+## Minimal
+
+```{r}
+summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+  filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = speaker, y = 100*freq, x = factor(title, factor_levels_sort_year))) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between characters",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  #scale_fill_brewer(palette = "Greens") +
+  facet_wrap(~year, ncol=nrow(summary), strip.position = "top") +
+  #theme(axis.text.x=element_blank()) +
+  coord_flip() +
+  #theme_bw()
+  theme_minimal()
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_tema_minimal.pdf"), width=16, height=9)
+
+```
+
+## Let's do the comparison between groups once more
+
+```{r}
+group_1 <- c("henrik", "jeronimus", "leander")
+group_1_name <- "Henrik, Jeronimus og Leander"
+
+group_2 <- c("pernille", "leonora", "magdelone")
+group_2_name <- "Pernille, Leonora og Magdelone"
+
+summary %>% 
+  filter(!is.na(title)) %>% 
+  filter(speaker %in% c(group_1, group_2)) %>% 
+  mutate(gruppe = if_else(speaker %in% group_1, group_1_name,group_2_name)) %>% 
+  ggplot(aes(fill = gruppe, y = freq*100, x = fct_rev(title))) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+      #subtitle = toupper("TEST"),
+      caption = "Source: DSL"
+    ) +
+  xlab("Play") +
+  ylab("Percentage of spoken words") +
+  labs(fill='Maskpair') +
+  coord_flip()
+      ggsave(here("graphs/pers-visualiseringer", "fordeling_talte_ord_grupper_igen.pdf"), width=16, height=9)
+
+```
+
+# Coloring
+
+Before running this section, we need to have previously computed `summary_fct2`.
+
+```{r}
+summary_fct2 %>% 
+    ## filter(speaker %in% c("henrik","pernille","troels")) %>%
+    filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+    ggplot(aes(fill = speaker, y = 100*freq, x = title_fct2)) +
+       geom_bar(stat="identity") +
+       theme(legend.position="bottom") +
+       labs(
+           title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+           ## subtitle = toupper("TEST"),
+           caption = "Source: DSL"
+       ) +
+    scale_y_continuous(limits = c(0,100), breaks = c(0,50,100)) +
+    xlab("Play") +
+    ylab("Percentage of spoken words") +
+    coord_flip()
+```
+
+Now we want to assign our own colors to Henrik, Jeronimus and Leander.
+
+
+```{r}
+summary_fct2 %>%
+    filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+    ggplot(aes(fill = speaker, y = 100*freq, x = title_fct2)) +
+       geom_bar(stat="identity") +
+       theme(legend.position="bottom") +
+       labs(
+           title = "Distribution of spoken words between few characters that reoccur across Holberg's oeuvre by year of publication",
+           ## subtitle = toupper("TEST"),
+           caption = "Source: DSL"
+       ) +
+      scale_fill_manual( # Here we fill in the colors of characters manually
+        values = c(
+          "henrik" = "purple",
+          "jeronimus" = "orange",
+          "leander"="steelblue"
+        )
+      ) +
+    scale_y_continuous(limits = c(0,100), breaks = c(0,50,100)) +
+    xlab("Play") +
+    ylab("Percentage of spoken words") +
+    coord_flip()
+```
+
+# Finally, save a visualization as a horizontal A4 pdf-file:
+
+```{r}
+ggsave(here("graphs/pers-visualiseringer", "ng3.pdf"),
+       width = 297, 
+       height = 210, 
+       units = "mm")
+```

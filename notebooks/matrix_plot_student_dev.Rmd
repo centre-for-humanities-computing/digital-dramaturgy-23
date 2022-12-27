@@ -1,0 +1,153 @@
+---
+title: "Heatmap plot"
+author: "db"
+date: "2022-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The product of this markdown is a function that makes a plot (a heatmap) indicating amount of speech by different characters in every scene across plays.
+
+```{r}
+# loading required libraries and functions
+library(tidyverse)
+library(tidytext)
+library(here)
+library(readxl)
+library(ndjson)
+library(fs)
+library(plotly)
+library(ggh4x)
+
+
+source(here("src", "p017-functions.R"))
+```
+
+Loading in all plays and standardizing names.
+
+```{r}
+
+allplays <- read_plays_jsonl(here("test-data")) %>% 
+  # add column containing both tidy title and year
+  mutate(title_year = paste0(title, " ", year))
+
+# load excel sheet with name variants
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+  mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+
+# use the variants object to rename speakers if needed in allplays
+allplays <- allplays %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker))
+
+```
+
+Making a function that calculates scene index.
+
+```{r}
+# find accumulated amount of scenes across act for each play
+scenes <- allplays %>% group_by(year, title_year, act_number) %>%
+  summarise(scenes = max(scene_number)) %>%
+  mutate(cum_scenes = ave(scenes, title_year, FUN = cumsum))
+
+# the function is defined
+calc_scene_index <- function(act_number, scene_number, act_length) {
+  ifelse(is.numeric(scene_number),
+      scene_number + ifelse(act_number==1, 0, act_length[act_number-1]),
+      NA)
+}
+
+# making a list of accumulated scenes across plays in chronological order
+play_index <- scenes %>% group_by(year, title_year) %>% 
+  summarise(max=max(cum_scenes)) %>% ungroup() %>% 
+  mutate(preceding_scenes=lag(cumsum(max)))
+
+play_index$preceding_scenes[1] <- 0
+
+```
+
+A
+
+```{r}
+speakers <- c("jens", "pernille")
+
+speech_heatmap <- function(speakers, data=allplays){
+  
+  # PREPARE DATA FRAME
+  df <- allplays %>%
+  
+    # remove rows that are not dialogue
+    filter(act != "", scene != "", speaker != "", !is.na(speaker), !is.na(spoke)) %>%
+    
+    # select only the speakers of interest
+    filter(speaker %in% speakers) %>% 
+    
+    # add column with number of spoken words
+    mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  
+    # organize dataset by grouping
+    group_by(title_year, act_number, scene_number, speaker) %>% 
+    
+    # sum the words spoken by each speaker
+    summarise(words = sum(n_spoken_words), title_year, act_number, scene_number) %>% 
+    
+    # remove repeated rows
+    distinct() %>% 
+  
+    # add column with text that can be displayed in plot
+    mutate(text = paste0("number of words: ", words)) %>%
+    
+    # add column with act and scene combined
+    mutate(act_scene = paste0(act_number, ":", scene_number))
+  
+  
+  # create new empty column that will contain scene number cumulated across acts. this will be the x-axis in the plot
+  df$scene_index <- 0
+  
+  # a for-loop that calculates the scene index
+  for (i in 1:nrow(df)){
+    act_length <- scenes$cum_scenes[scenes$title_year==df$title_year[i]]
+    
+    df$scene_index[i] <- calc_scene_index(df$act_number[i], df$scene_number[i], act_length)
+    #+play_index$preceding_scenes[play_index$title_year==df$title_year[i]]
+  }
+  
+  #df$scene_index <- as.factor(df$scene_index)
+  
+  # PLOT
+  p <- ggplot(df, aes(act_scene, speaker, fill=words, text=text))+
+    geom_tile()+
+    xlab("Akt:Scene")+
+    ylab("Speaker") +
+    facet_wrap(~ title_year, scales = "free_x")+
+  #theme(axis.text.x=element_blank(), line = element_blank(), rect = element_blank()) +
+    theme_bw()+
+  theme(legend.position = "none", axis.text.x = element_text(size = 5, angle = 55, hjust=1), strip.text.x = element_text(size = 6))
+  
+  p2 <- ggplot(df, aes(act_scene, speaker, fill=words, text=text))+
+    geom_tile()+
+    xlab("Akt:Scene")+
+    facet_grid(speaker ~ title_year, scales = "free")+
+  #theme(axis.text.x=element_blank(), line = element_blank(), rect = element_blank()) +
+    theme_bw()+
+  theme(legend.position = "none", axis.text.x = element_text(size = 5, angle = 55, hjust=1), strip.text.x = element_text(size = 6))
+  
+  p
+  p2
+  ggplotly(p, tooltip="text")
+  
+}
+```
+
+```{r}
+facet_grid(rows = vars("title_year" = title_year), cols = vars("act_number" = act_number, "scene_number" = scene_number), switch = "x", scales = "free_x")
+```
+

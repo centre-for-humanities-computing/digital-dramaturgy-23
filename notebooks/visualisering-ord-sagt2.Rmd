@@ -1,0 +1,308 @@
+---
+title: "Visualisering af antal sagte ord 2"
+output: html_notebook
+author: baj
+---
+
+Genbrug: Vi starter med alt det samme som i "visualisering-ord-sag.Rmd".
+
+```{r, message=FALSE}
+library(tidyverse)
+library(here)
+library(ndjson)
+library(xslt)
+library(fs)
+library(ggplot2)
+library(readxl)
+library(tidytext)
+
+require(readr)  # for read_csv()
+require(purrr)  # for map(), reduce()
+
+source(here("src/p017-functions.R"))
+```
+
+# Indlæs data
+
+```{r}
+here()
+convert_TEI_to_JSONL(here("test-data"))
+```
+
+```{r}
+read_plays_jsonl(here("test-data")) %>% select(filename, everything()) -> plays
+```
+
+```{r}
+plays
+```
+
+# Indlæs Excelarket
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+     unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+variants
+```
+
+## Indlæs stykkerne med fil-navne!
+
+```{r, eval=FALSE}
+# Alle stykker som json filer
+json_file_list <- list.files(here("test-data"), pattern = "*.jsonl")
+length(json_file_list)
+head(json_file_list)
+
+plays <- read_play_jsonl(here("test-data",json_file_list[1]))
+
+for(i in 2:length(json_file_list)) {
+  print(json_file_list[i])
+  plays <- bind_rows(plays, read_play_jsonl(here("test-data",json_file_list[i])))
+}
+
+plays
+```
+
+\#Sammenlæg navnevarianter Husk at bruge Filnavn til noget!
+
+```{r}
+glimpse(plays)
+```
+
+```{r}
+plays %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  distinct -> plays
+plays
+```
+
+
+# Tilføj generelle farvekoder for komedierne
+
+## Indlæs Excelarket
+
+```{r}
+komedietitler <- read_excel(here("Komedietitler.xlsx"))
+komedietitler
+```
+## Anvend Excelarket
+
+```{r}
+(plays %>% 
+  left_join(komedietitler, by = c("title" = "moderne titel")) -> plays)
+```
+
+# Nu tæller vi total antal ord sagt pr karakter pr stykke. Dernæst omregnet til procent af totale ord i stykket.
+
+```{r}
+
+# count words in "spoke"
+(plays %>% 
+  # remove rows that are not dialogue and empty speakers
+  filter(!is.na(spoke), speaker != "") %>%
+  
+  # select only the columns, that we are interested in
+  select(speaker, title, year, spoke, farvekode) %>% 
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  # remove the spoken words
+  select(-spoke) %>%
+  
+  # group by title and speaker
+  group_by(title, year, speaker, farvekode) %>% 
+
+  # Sum the words spoken by each speaker in each play
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), title, year) %>%
+    distinct() -> my_summary
+)
+   # Calculate %
+(my_summary %>%
+    ungroup(speaker) %>%
+    summarise(words_play = sum(words)) -> totals)
+   
+(my_summary %>%
+  full_join(totals) %>%
+  summarise(freq = words / words_play, speaker, title, year, words, words_play, farvekode) ->
+    new_summary
+    )
+  # Sort by freq
+(new_summary %>%
+  arrange(desc(freq)))
+
+```
+
+Now "new_summary" holds all the information that we need. We sorted it to see who speaks the most. Next we choose a character to visualise... In this example I choose "Jeronimus".
+
+# Visualisering
+
+```{r}
+character_plot <- function(character_name) {
+  (new_summary %>% 
+  filter(speaker == character_name) %>%
+    transmute(freq, title_year = paste(title,year)) %>%
+  arrange(year) -> tmp)
+  tmp %>%
+  ggplot(aes(fill = title, y = freq, x = title_year)) + #, colour = farvekode
+    geom_bar(stat="identity") +
+    theme(legend.position="none") +
+    labs(
+      title = "Procent talte ord over år og komedier",
+      subtitle = toupper(character_name),
+      caption = "Kilde: DSL"
+    ) +
+  xlab("År og komedie") +
+  ylab("Procent sagte ord") +
+  #facet_wrap(~year, ncol=nrow(new_summary), switch="x") +
+  #theme(axis.text.x=element_blank())
+        theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust = 1, size = 6)) 
+
+}
+
+```
+
+WORK IN PROGRESS: KOMEDIERNE SKAL ALTSÅ KUN STÅ ET STED - VED DET KORREKTE ÅR!
+HVIS JEG TAGER FACET WRAP UD STÅR DE KUN EN GANG, MEN I FORKERT RÆKKEFØLGE.
+OG VI HAR STADIG KUN DEM MED, SOM HENRIK OPTRÆDER I. VI VIL GERNE HAVE ALLE STYKKER MED.
+
+# Grafikker
+## Henrik
+
+```{r}
+character_plot ("henrik")
+ggsave(here("graphs/visualisering-ord-sagt2", "henrik_over_tid.pdf"), width=18, height=9)
+```
+
+## Pernille
+
+```{r}
+character_plot("pernille")
+ggsave(here("graphs/visualisering-ord-sagt2", "pernille_over_tid.pdf"), width=16, height=9)
+
+```
+
+## Leander
+```{r}
+character_plot("leander")
+ggsave(here("graphs/visualisering-ord-sagt2", "leander_over_tid.pdf"), width=16, height=9)
+
+```
+## Leonora
+```{r}
+character_plot("leonora")
+ggsave(here("graphs/visualisering-ord-sagt2", "leonora_over_tid.pdf"), width=16, height=9)
+
+```
+
+## Jeronimus
+```{r}
+character_plot("jeronimus")
+ggsave(here("graphs/visualisering-ord-sagt2", "jeronimus_over_tid.pdf"), width=16, height=9)
+
+```
+
+## Magdelone
+```{r}
+character_plot("magdelone")
+ggsave(here("graphs/visualisering-ord-sagt2", "magdelone_over_tid.pdf"), width=16, height=9)
+
+```
+
+# Sammenligning af karakterer
+
+Basalt set skal vi have implementeret en funktion á la `character_comparison_plot(<list of character names>, <list of character names>)`.
+
+Først skal jeg dog lige forstå denne kode, som er taget fra her over
+
+```{r}
+# count words in "spoke"
+plays %>%
+  # remove rows that are not dialogue and empty speakers
+  filter(!is.na(spoke), speaker != "") %>%
+  
+  # select only the columns, that we are interested in
+  select(speaker, title, year, spoke) %>%
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>%
+  # remove the spoken words
+  select(-spoke) %>%
+  
+  # group by title and speaker
+  group_by(title, year, speaker) %>%
+  
+  # Sum the words spoken by each speaker in each play
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), title, year) %>%
+  distinct() -> summary
+
+summary %>%
+    ungroup(speaker) %>%
+    summarise(words_play = sum(words)) -> totals
+
+summary %>%
+  full_join(totals) %>%
+  summarise(freq = words / words_play, speaker, title, year, words, words_play) -> summary
+
+```
+
+# Sammenligning af enkelte karakterer
+
+```{r}
+  summary %>% 
+  #filter(speaker %in% c("henrik","pernille","troels")) %>%
+filter(speaker %in%   c("henrik", "jeronimus", "leander")) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = speaker, y = freq, x = title)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Fordeling af talte ord over år mellem få gennemgående karakterer",
+      #subtitle = toupper("TEST"),
+      caption = "Kilde: DSL"
+    ) +
+  xlab("year") +
+  ylab("Procent sagte ord") +
+  facet_wrap(~year, ncol=nrow(summary), switch="x") +
+  theme(axis.text.x=element_blank())
+
+ggsave(here("graphs/visualisering-ord-sagt2", "henrik_jeronimus_leander.pdf"), width=16, height=9)
+
+```
+
+# Sammenligning af grupper af karakterer
+
+```{r}
+group_1 <- c("henrik", "jeronimus", "leander")
+group_2 <- c("pernille", "leonora", "magdelone")
+
+summary %>% 
+  filter(speaker %in% c(group_1, group_2)) %>% 
+  mutate(gruppe = if_else(speaker %in% group_1, "Henrik, Jeronimus og Leander","Pernille, Leonora og Magdelone")) %>% 
+  #filter(speaker %in% c("henrik","pernille","leonora")) %>%
+  arrange(year) %>%
+  ggplot(aes(fill = gruppe, y = freq*100, x = title)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Fordeling af talte ord over år mellem få gennemgående karakterer",
+      #subtitle = toupper("TEST"),
+      caption = "Kilde: DSL"
+    ) +
+  xlab("Årstal") +
+  ylab("Procent sagte ord") +
+  labs(fill='Maskepar') +
+  facet_wrap(~year, ncol=nrow(summary), switch="x") +
+  theme(axis.text.x=element_blank())
+
+ggsave(here("graphs/visualisering-ord-sagt2", "henrik_jeronimus_leander-pernille_leonora_magdelone.pdf"), width=16, height=9)
+
+```
+

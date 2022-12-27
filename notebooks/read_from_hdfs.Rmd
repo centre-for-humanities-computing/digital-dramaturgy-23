@@ -1,0 +1,89 @@
+---
+title: "Read Newspapers from HDFS"
+author: baj
+date: 2021-02-10
+output: html_notebook
+---
+# Read the Newspaper txt files from HDFS
+
+First load libraries and establish connection
+```{r}
+library(sparklyr)
+library(dplyr)
+
+conf <- spark_config()
+conf$spark.dynamicAllocation.minExecutors <- 20
+
+spark_disconnect_all()
+
+sc <-
+spark_connect(
+master = 'yarn-client',
+app_name = paste("P017_solrsearchword_analysis"),
+config = conf
+) 
+```
+
+Now we can read the text files from a directory into a table.
+```{r}
+# Imports txt files from directory on hdfs
+path <- paste0("/projects/p017/aviser/1748-1754/*.txt")
+txt_files <- spark_read_text(sc, "doyle", path)
+head(txt_files)
+```
+Vi skulle måske skrive den til en parque-fil, som vi kan loade næste gang.
+
+Vi skulle måske også huske hvilken fil teksten kom fra. det kigger @abr på :)
+
+Husk:
+int
+instr(string str, string substr)
+Returns the position of the first occurrence of substr in str. Returns null if either of the arguments are null and returns 0 if substr could not be found in str. Be aware that this is not zero based. The first character in str has index 1. 
+
+Nu kan vi kigge på hvad der er i vores table.
+```{r}
+#sdf_bind_rows() can be used e.g. to append the files from a second directory
+#regexp_replace is used to remove punctuation
+all_words <- txt_files %>%
+  mutate(line = regexp_replace(line, "[_\"\'():;,.!?\\-]", " ")) 
+#ft_tokenizer() uses the Spark API to separate each word
+all_words <- all_words %>%
+    ft_tokenizer(input_col = "line",
+               output_col = "word_list")
+
+head(all_words, 4)
+```
+Så skal vi måske kigge på "ft_stop_words_remover()", men så skal vi bruge en stopordsliste...
+
+The Hive UDF explode performs the job of unnesting the tokens into their own row. Some further filtering and field selection is done to reduce the size of the dataset.
+
+```{r}
+all_words <- all_words %>%
+  mutate(word = explode(word_list)) %>%
+  select(word) %>%
+  filter(nchar(word) > 2)
+  
+head(all_words, 6)
+
+```
+
+compute() will operate this transformation and cache the results in Spark memory. It is a good idea to pass a name to compute() to make it easier to identify it inside the Spark environment. In this case the name will be all_words
+
+```{r}
+all_words <- all_words %>%
+  compute("all_words")
+```
+
+#Data Analysis
+Words used the most
+
+```{r}
+word_count <- all_words %>%
+  group_by(word) %>%
+  tally() %>%
+  arrange(desc(n)) 
+  
+word_count
+```
+
+Det er så alle stopordene vi får først. Nede på linje 47 og 48 kommer "gaard" og "arvinger", som måske fortæller noget om den tids vigtige nyheder.

@@ -1,0 +1,112 @@
+---
+title: "Scratch"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+barselstuen_index1 <-barselstuen_raw %>% filter(index == "1")
+barselstuen_index1
+
+## if (spoke==NA) use index 2
+barselstuen_spoke <- barselstuen_raw %>% filter(!is.na(spoke))
+barselstuen_spoke
+
+barselstuen_spoke2 <- barselstuen_raw %>% filter(index == "2", !is.na(spoke))
+barselstuen_spoke2
+
+b <- barselstuen_spoke1 %>% select(act, scene)
+b
+
+rows_update(barselstuen_spoke2, tibble(b = "z", a = 2:3), barselstuen_spoke1)
+
+
+
+
+## if (spoke==NA) use index 2
+for (val in barselstuen_index1)
+{
+if (is.na(val[spoke])) {
+val <- (barselstuen_raw %>% 
+  filter(index == "2"))
+}
+}
+
+
+
+
+barselstuen_raw %>% select(scene_number, speaker) %>% group_by(act_number,scene_number) %>% distinct() %>% summarise( speakers =paste(collect_list(speaker))) 
+```
+
+# Looking at the data
+
+```{r}
+barselstuen_raw
+```
+
+```{r}
+barselstuen_raw %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+
+```{r}
+barselstuen_raw %>% 
+  count(scene) %>% 
+  arrange(desc(n))
+```
+
+Hvilken scene har flest skuespillere? Først sammentælles scene og rolle. Dernæst tælles så udelukkende scene:
+
+```{r}
+barselstuen_raw %>% 
+  count(scene, speaker) %>% 
+  count(scene) %>% 
+  arrange(desc(n))
+```
+
+Whau, 18! Lad os se nærmere på scene 5
+
+```{r}
+barselstuen_raw %>% 
+  filter(scene == "Scene 5")
+```
+
+Okay, hvor mange er så med i denne scene (og hvor mange gange siger de hver i sær noget)?
+
+```{r paged.print=FALSE}
+barselstuen_raw %>% 
+  filter(scene == "Scene 5") %>% 
+  count(speaker)
+```
+
+# Første replik i hver scene
+
+```{r}
+barselstuen_raw %>%
+  #Group by så vi håndterer hver scene for sig
+ group_by(act_number, scene_number) %>%
+  #Filtrer alle linier som ikke er replikker fra
+ filter(!is.na(spoke)) %>%
+  # Sorter i hver gruppe, så linierne kommer i rækkefølge
+ arrange(index, .by_group = TRUE) %>%
+  # Lav et ny index i hver gruppe, startende med den første.
+  # På den måde ved jeg at den første i hver gruppe er nr 1.
+ mutate(group_row_num = row_number()) %>%
+  # Kun behold den første i hver gruppe
+ filter(group_row_num == 1) %>%
+  # Fjern gruppe index for det er ikke relevant længere
+ select(- group_row_num )
+```

@@ -1,0 +1,507 @@
+---
+title: "Visualisering af antal sagte ord"
+output: html_notebook
+author: pmd
+---
+
+Før vi begynder, skal vi indlæse de udvidelsespakker til R, som vi vil benytte. Til sidst i denne kodeblok indlæser vi også de R funktioner vi har skrevet til dette projekt ved at `source` filen `src/p017-functions.R`.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(here)
+library(ndjson)
+library(xslt)
+library(fs)
+library(ggplot2)
+
+require(readr)  # for read_csv()
+require(purrr)  # for map(), reduce()
+
+source(here("src/p017-functions.R"))
+```
+
+# Indlæs data
+
+Vi kan nu benytte en af P017 funktionerne til at indlæse alle de Holberg stykker, som vi har liggende i `test-data` mappen.
+Vi laver en tabel med navnet plays.
+
+```{r}
+here()
+convert_TEI_to_JSONL(here("test-data"))
+read_plays_jsonl(here("test-data")) -> plays
+```
+
+For at gøre det nemmere for os selv, starter vi med kun at se på ét skuespil "my_play" (fx Barselsstuen). Vi filtrerer ikke længere efter titel. Vi indlæser direkte fra JSON-filen! Forhåbentlig er "my_file" det eneste sted vi skal ændre for at lave visualiseringen for et andet skuespil :)
+
+```{r}
+# my_file <- "GertWestphaler1724_mod.jsonl" 
+# my_file <- "Bondedreng_mod.jsonl" 
+# my_file <- "Mascarade_mod.jsonl"
+# my_file <- "Barselstuen_mod.jsonl"
+# my_file <- "Ulysses_mod.jsonl"
+# my_file <- "uden_hoved_og_hale_mod.jsonl"
+my_file <- "Skibbrud_mod.jsonl"
+# my_file <- "Sganarel_mod.jsonl"
+# my_file <- "Republiqven_mod.jsonl"
+# my_file <- "Ranudo_mod.jsonl"
+# my_file <- "Plutus_mod.jsonl"
+# my_file <- "Philosophus_mod.jsonl"
+# my_file <- "Pernille_mod.jsonl"
+# todo den her virker ikke: my_file <- "Nytaarsprolog_mod.jsonl"
+# my_file <- "Melampe_mod.jsonl"
+# my_file <- "Ligbeg_mod.jsonl"
+# my_file <- "Kilde-Reysen_mod.jsonl"
+# my_file <- "Kandst_mod.jsonl" todo udfordring med 1. og 2. <w>rådsherreinde</w>
+# my_file <- "Juele-Stue_mod.jsonl"
+# todo den her virker heller ikke: my_file <- "JJ_Bet_1723_mod.jsonl"
+# my_file <- "Jeppe_mod.jsonl"
+# my_file <- "Jean_de_France_mod.jsonl"
+# my_file <- "Jacob_von_Tyboe_mod.jsonl"
+# my_file <- "Hexerie_mod.jsonl"
+# my_file <- "Henrick_og_Pernille_mod.jsonl"
+# my_file <- "GertWestphaler1723_mod.jsonl"
+# my_file <- "Erasmus_mod.jsonl"
+# my_file <- "Diderich_mod.jsonl"
+# my_file <- "Det_Arabiske_Pulver_mod.jsonl"
+# my_file <- "Den_Vaegelsindede_1731_mod.jsonl"
+# my_file <- "De_u-synlige_mod.jsonl"
+# my_file <- "Den_Vaegelsindede_1723_mod.jsonl"
+# my_file <- "Den_Stundesloese_mod.jsonl"
+# my_file <- "Den_Honnette_Ambition_mod.jsonl"
+# my_file <- "Den_11_Junii_mod.jsonl"
+# my_file <- "Brudgom_mod.jsonl"
+# my_file <- "Abracadabra_mod.jsonl"
+my_play <- read_play_jsonl(here("test-data", my_file))
+my_play
+```
+
+# Gør data klar til visualisering
+
+I et skuespil lader vi scene være den tidsmæssige udvikling. Så vi tæller hvad hver rolle siger for hver scene.
+
+Hvor mange dialoger er der pr. scene?
+
+```{r}
+my_play %>%
+  count(act_number, scene_number)
+```
+
+## Tilføj scene indeks
+
+Da vi ønsker at visualisere, hvor meget der tales over tid, har vi brug for et tal, der repræsenterer denne tid. Dette tal lader vi være et indeks for hver scene, som vi beregner i det følgende.
+
+Først skal vi have beregnet antallet af scener i hver akt. Det gøres med følgende kode.
+
+```{r, warning=FALSE, message=FALSE}
+my_play %>% 
+   group_by(act_number)  %>% 
+   summarise(scenes = max(scene_number)) %>% 
+   pull(scenes) %>% cumsum() -> act_length
+
+act_length
+(number_of_scenes = sum(act_length))
+```
+
+`act_length` er nu en liste, hvor element *i* angiver hvor mange scener der har været til og med akt *i*. Fx er det tredje element i listen 28, hvilket betyder, at der i akt 1 til 3 sammenlagt er 28 scener. 'number_of_scenes' er det samlede antal scener.
+
+Vi kan nu lave en funktion, som givet et aktnummer og scenenummer kan beregne den givne scenes nummer i sekvensen af alle scener
+
+```{r}
+calc_scene_index <- function(act_number, scene_number, act_length) {
+   ifelse(is.numeric(scene_number),
+      scene_number + ifelse(act_number==1, 0, act_length[act_number-1]),
+      NA
+   )
+}
+```
+
+Vi bruger den som følger til at finde fx hvilket indeks den 4. scene i akt 3 har
+
+```{r}
+calc_scene_index(3, 4, act_length)
+calc_scene_index(2, 6, act_length)
+```
+
+
+# Visualiser
+
+For at visualisere hvem der siger hvor meget i de enkelte scener, skal vi erstatte det sagte med hvor mange ord, der bliver sagt. Dette gør vi ved at benytte funktionen `str_count(spoke, '\\w+')` som tager `spoke` og tæller hvor mange ord, der er i `spoke`. Denne værdi tilføjer vi i en ny kolonne, som vi kalder `n_spoken_words`.
+
+```{r}
+(my_play %>% 
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  select(n_spoken_words, everything()) -> tmp)
+```
+
+Vi er nu ved at være klar til at visualisere, hvem der siger hvor meget i fx Barselsstuen. Vi mangler bare at kombinere ovenstående kode
+
+```{r, rows.print=10}
+my_play %>% 
+  # add a scene index for the x-axis
+  rowwise() %>% 
+  mutate(scene_index = calc_scene_index(act_number, scene_number, act_length)) %>% 
+  # remove rows that are not dialogue
+  filter(act != "", scene != "", !is.na(spoke)) %>%
+  
+  # select only the columns, that we are interested in
+  select(scene_index, act_number, scene_number, speaker, spoke) %>% 
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  # remove the spoken words
+  select(-spoke) %>%
+  
+  # group the play in scene_index and speaker, ignoring the test
+  group_by(scene_index, act_number, scene_number, speaker) %>% 
+
+  # Ensure that each speaker only appears once in each scene, i.e. sum the words spoken by each speaker
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), act_number, scene_number) %>%
+  distinct() -> my_summary
+#print(barselsstuen_vis, n=60)
+my_summary
+```
+
+Vi kan nu bruge `my_summary` som input til R's visualiseringssystem, som hedder `ggplot`
+Nu er titlen på grafen fil-navnet, men den kan selvfølgelig ændres, hvis det ønskes.
+
+```{r}
+my_summary %>% 
+  ggplot(aes(fill = speaker, y = words, x = scene_index)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = my_file,
+      subtitle = "Hvor meget siger hvem",
+      caption = "Kilde: DSL",
+      fill = "Rolle"
+    ) +
+  xlab("Akt og scene") +
+  ylab("Antal sagte ord")
+```
+
+## Sammenlæg forskellige stavemåde af samme rolle
+
+I ovenstående diagram ser vi, at flere roller optræder med flere stavemåder. Det kan vi heldigvis nemt håndtere.
+
+Først laver vi en liste over alle roller i fx Barselsstuen
+Husk at ændre titel
+
+```{r, rows.print=70}
+print(my_summary %>%
+        ungroup() %>% 
+  select(speaker) %>%
+  distinct(speaker) %>%
+  arrange(speaker), n=60)
+```
+
+Vi kan nu bruge to R funktioner: `if_else()` og `%in%`. Den første har tre argumenter. Det første er et logisk udtryk. Hvis dette udtryk er sandt, returneres resultatet af det andet argument. Hvis udtrykket er falsk, returneres resultatet af det tredje argument. Fx
+
+```{r}
+if_else(2==2, "Korrekt", "FAKE NEWS")
+```
+
+```{r}
+if_else("Trump"=="Klog", "Korrekt", "FAKE NEWS")
+```
+
+Vi vil også benytte funktionen `%in%`, som tjekker for om det der står til venstre er indeholdt i den liste der står til højre. Fx
+
+```{r}
+12 %in% c(1,2,3,4)
+```
+
+```{r}
+12 %in% c(1, 2, 3, 12, 24)
+```
+
+Med de to funktioner, kan vi nu skrive denne kode
+Husk at disse ændringer er lavet til "Barselstuen"
+
+```{r}
+my_summary %>% 
+  ungroup() %>% 
+  
+  # count all versions of Leander as one
+  mutate(
+    speaker = if_else(speaker %in% c("Leander", "Leander på Knæ"), "Leander", speaker)) %>%
+  
+  # count all versions of Barselskvinden as one
+  mutate(
+    speaker = if_else(speaker %in% c("Barselskonen", "Barselskvinden", "Barselsqvinde"), "Barselskvinden", speaker)) %>% 
+  
+  # Count all versions of kællingen as one
+  mutate(
+    speaker = if_else(speaker %in% c("Kælling", "Kællingen"), "Kællingen", speaker)) %>% 
+  
+  ggplot(aes(fill = speaker, y = words, x = scene_index)) +
+    geom_bar(stat="identity", width = 50) +
+    theme(legend.position="bottom") +
+    labs(
+      title = my_file,
+      subtitle = "Hvor meget siger hvem",
+      caption = "Kilde: DSL",
+      fill = "Rolle"
+    ) +
+  xlab("Akt og scene") +
+  ylab("Antal sagte ord") + 
+  facet_wrap(act_number~scene_number, ncol=number_of_scenes, switch="x")+
+  theme(axis.text.x=element_blank())
+
+```
+# Tilføj generel sammenlægning af forskellige stavemåde af samme rolle ved hjælp af excelarket
+
+## Indlæs Excelarket
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+     unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+variants
+```
+
+## Anvend Excelarket
+
+```{r}
+(my_play %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  distinct -> my_play)
+```
+## Gentag klargøring af data
+
+```{r}
+my_play %>% 
+  select(docTitle) %>% 
+  distinct() %>%
+  pull(1,1) -> my_title
+
+my_play %>% 
+  select(year) %>% 
+  distinct() %>%
+  pull(1,1) -> my_year
+
+
+my_play %>% 
+  # add a scene index for the x-axis
+  rowwise() %>% 
+  mutate(scene_index = calc_scene_index(act_number, scene_number, act_length)) %>% 
+  # remove rows that are not dialogue
+  filter(act != "", scene != "", !is.na(spoke)) %>%
+  
+  # select only the columns, that we are interested in
+  select(scene_index, act_number, scene_number, speaker, spoke) %>% 
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  # remove the spoken words
+  select(-spoke) %>%
+  
+  # group the play in scene_index and speaker, ignoring the test
+  group_by(scene_index, act_number, scene_number, speaker) %>% 
+
+  # Ensure that each speaker only appears once in each scene, i.e. sum the words spoken by each speaker
+  # Lastly store the new data frame in a new reference for later use
+  summarise(words = sum(n_spoken_words), act_number, scene_number) %>%
+  distinct() -> my_summary
+#print(barselsstuen_vis, n=60)
+my_summary
+```
+## Gentag visualisering
+
+# Vi vil gerne have en linje/visuel adskillelse mellem akterne i graferne.
+Det kan jeg simpelthen ikke få til at virke!
+
+#Og stykkets titel og årstal tilføjes i header før filnavn.
+Det er til gengæld nemt. Vi paster det bare ind i title.
+
+```{r}
+(new_act <- my_summary %>%
+  ungroup %>%
+  arrange(scene_index) %>%
+  select(act_number, scene_number, scene_index) %>%
+  distinct() %>%
+  filter(scene_number==1) %>%
+  mutate(line = scene_index + 0.5) %>%
+  select(line) %>%
+  data_frame())
+```
+
+```{r}
+library(grid) # for panel.spacing
+
+my_summary %>% 
+  ggplot(aes(fill = speaker, y = words, x = scene_index)) +
+    geom_bar(stat="identity", width = 50) +
+    #geom_vline(xintercept = 5) + 
+    theme(
+      legend.position="bottom",
+      #panel.spacing = unit(3, "mm")
+    ) +
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Hvor meget siger hvem",
+      caption = "Kilde: DSL",
+      fill = "Rolle"
+    ) +
+  xlab("Akt og scene") +
+  ylab("Antal sagte ord") + 
+  facet_wrap(
+    act_number~scene_number,
+    ncol=number_of_scenes,
+    strip.position = "bottom"
+  ) +
+  theme(axis.text.x=element_blank()) #+
+  #scale_x_continuous(aes(scene_index, breaks = new_act))
+                     
+  #theme(panel.grid.major.x = element_line(color = "gray10", size = .5))
+  
+  #geom_vline(aes(xintercept = line), new_act)
+
+  #ggsave(here("graphs/visualisering-ord-sagt", paste(my_file, ".hvor_meget_siger_hvem.pdf")), width=16, height=9)
+
+```
+# Graf over hvem siger noget hvornår
+
+```{r}
+my_summary %>% 
+  ggplot(aes(y = speaker, x = scene_index)) +
+    geom_point(show.legend = FALSE) + #aes(col=speaker, size=words), 
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Hvem taler hvornår"
+    ) +
+  xlab("Akt og scene") +
+  ylab("Speaker") + 
+  facet_wrap(act_number~scene_number, ncol=number_of_scenes, switch="x") +
+  theme(axis.text.x=element_blank()) + 
+
+  ggsave(here("graphs/visualisering-ord-sagt", paste(my_file, ".hvem_taler_hvornaar.pdf")), width=16, height=9)
+
+```
+
+```{r}
+my_summary
+```
+
+```{r}
+my_summary |> 
+  ggplot() +
+    geom_histogram(aes(x=words))
+```
+
+```{r}
+my_summary |>
+  ungroup() |> 
+  mutate(sa = str_c(act_number,",", scene_number)) |>
+  select(sa) |> 
+  distinct(sa)  |> pull(sa) -> scene_act_numbers
+scene_act_numbers
+```
+
+```{r}
+my_summary |>
+  ungroup() |> 
+  select(scene_number) |> 
+  #distinct(scene_number) |>
+  pull(scene_number) -> scene_numbers
+scene_numbers
+```
+
+```{r}
+my_summary |>
+  ungroup() |> 
+  mutate(sa = str_c(act_number,",", scene_number)) |>
+  select(sa, scene_number) |> 
+  distinct(sa,scene_number) |> 
+  pull(scene_number) -> scene_numbers
+```
+
+
+```{r}
+my_summary %>% 
+  mutate(act_number = factor(act_number)) |> 
+  mutate(scene_index = factor(scene_index)) |> 
+  #filter(act_number == 1) |> 
+  ggplot(aes(y = speaker, x = scene_index, size=words, colour = act_number, alpha = 0.5)) +
+    geom_point(show.legend = TRUE) +
+    #geom_vline(xintercept = 10, colour = "red") +
+    #scale_size_continuous(breaks=c(50,100,150,200,250,300,400,500), range = c(0,20)) +
+  scale_size_continuous(range = c(0,20)) +
+    
+    #scale_x_discrete(breaks = c(1,10,20,30,40,50), labels = c("Act 1", "Act 2", "Act 3", "Act 4", "Act 5", "Act 6")) +
+    scale_x_discrete(labels = scene_numbers) +
+  #labels=c("0" = "Dose 0.5", "1" = "Dose 1","2" = "Dose 2")
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Hvem taler hvornår"
+    ) +
+  xlab("Scene") +
+  ylab("") + 
+  #facet_wrap(act_number~scene_number, ncol=number_of_scenes, switch="x") +
+  theme(
+    #axis.text.x=element_blank(),
+    panel.background = element_blank(),
+    legend.key=element_blank()
+    )
+```
+
+```{r}
+ggsave("~/Desktop/bobler.pdf", width=12, height=8)
+```
+
+
+```{r}
+my_summary |> 
+  filter(act_number == 1)
+```
+
+
+Det her er simpelthen en anden måde at visualisere, hvornår karaktererne taler i stykket.
+
+
+
+
+
+#Graf over omtale
+
+Vi vil gerne vide, hvilke karakterer, der bliver talt om, men som ikke selv er til stede. Grafen skal være magen til den eksisterende. (se vedhæft). Her skal vi nok bruge den liste, som er under udfærdigelse.
+
+Nu prøver jeg lige at lave en i stil med den ovenfor!
+
+Først skal vi definere omtale. Jeg tænker at vi gør det ligesom med 'ikke til stede'. Altså hvis en karakter optræder i en replik i en scene, hvor den karakter ikke selv er til stede, bliver den karakter omtalt.
+
+
+
+```{r}
+source(here("src", "omtale.R"))
+(spoken_about(my_play) %>%
+  # add a scene index for the x-axis
+  rowwise() %>% 
+  mutate(scene_index = calc_scene_index(act_number, scene_number, act_length))
+  -> spoken_about_summary) 
+
+spoken_about_summary %>% 
+  ggplot(aes(y = word, x = scene_index)) +
+    geom_point(show.legend = FALSE) + 
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Hvem bliver omtalt"
+    ) +
+  xlab("Akt og scene") +
+  ylab("Speaker") + 
+  facet_wrap(act_number~scene_number, ncol=number_of_scenes, switch="x") +
+  theme(axis.text.x=element_blank()) + 
+
+  ggsave(here("graphs/visualisering-ord-sagt", paste(my_file, ".hvem_bliver_omtalt.pdf")), width=16, height=9)
+
+
+
+```
+

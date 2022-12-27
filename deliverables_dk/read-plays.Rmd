@@ -1,0 +1,190 @@
+---
+title: "Hvordan læses stykkerne ind i R?"
+output: html_notebook
+author: pmd
+---
+Stykkerne er i TEI format. Dette format har ikke en standard indlæsningsmetod til R. Derfor transformerer vi TEI filerne over i et format der bedre passer til R. Vi har her valgt JSONL, men kunne have valgt andre formater. I JSONL formatet er hver linie i sig selv en stump valid JSON, mens filen som et hele ikke er valid JSON. Dette gør, at hver linie kan læses uafhængigt af hele filen.
+
+For at gøre dette nemt, har vi skrevet to små R funktioner. En der transformerer alle TEI filer i en mappe og en der indlæser alle JSONL filer i en mappe til R. TEI filer er identificeret ved at deres filnavn ender med ".page".
+
+Denne notebook illustrerer brugen af disse to funktioner.
+
+Før vi starter skal vi indlæse de nødvendige udvidelsespakker til R.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+library(xslt)
+```
+
+De to hjælpefunktioner er defineret i `src/p017-functions.R`, som vi indlæser på følgende vis
+
+```{r}
+source(here("src", "p017-functions.R"))
+```
+
+# Transformation af TEI filer
+
+Vi har placeret to testfiler i mappen `test-data`
+Det virker også at køre det på hele 'data/holberg-komedier-nc', altså mappen med alle komedie-filerne.
+Du kan sætte det directory du ønsker ind i 'my-dir' variablen.
+
+```{r}
+my_dir <-"test-data"
+dir_ls(here(my_dir))
+```
+
+For at transformere disse to filer, gør vi følgende
+
+```{r}
+convert_TEI_to_JSONL(here(my_dir))
+```
+
+Hvis vi nu igen ser i mappen `data/holberg-komedier-nc`, kan vi se at der er kommet to nye filer
+
+```{r}
+dir_ls(here(my_dir))
+```
+
+# Indlæsning af JSONL filer til R
+
+Vi kan nu indlæse de to nye JSONL filer på følgende vis
+
+```{r}
+read_plays_jsonl(here(my_dir)) -> plays
+
+```
+
+Lad os kort se på fx hvor mange rækker, vi har i hvert af de indlæste skuespil.
+Rækker er her ikke så meningsgivende, da det både kan være replikker og regibemærkninger.
+Lad os derfor også prøve at finde antal replikker og antal regibemærkninger!
+
+Og antal sagte ord!
+
+```{r}
+# Tæl antal rækker
+# Hvis vi bruger titel til at identificere de forskellige komedier, 
+# vil vi komme til at slå de to udgaver af "Den vægelsindede" sammen,
+# og de to udgaver af "Mester Gert Westphaler". 
+# Det undgår vi ved at bruge fuld titel (docTitle) eller ved også at bruge årstal (year).
+(plays %>% 
+  count(docTitle, year, name = "rækker") -> antal_rækker)
+
+# Tæl antal replikker
+(plays %>%
+  filter(!is.na(spoke)) %>% #filtrer replikker markeret NA ud
+  filter(!(spoke == "")) %>% #filtrer tomme replikker ud
+  count(docTitle, year, name = "replikker") -> antal_replikker)
+
+# Tæl antal sagte ord i stykket
+(plays %>%
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>%
+  # remove rows that are not dialogue
+  filter(!is.na(spoke)) %>%
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  # group the play in scene_index and speaker, ignoring the test
+  group_by(docTitle, year) %>% 
+  # sum the words spoken by each speaker
+  summarise(words = sum(n_spoken_words), docTitle, year) %>%
+  distinct() -> antal_ord)
+
+# Tæl antal regibemærkninger
+# bemærk de findes på to niveauer, så i første omgang tæller vi dem hver for sig
+# Tæl antal <stage>
+(plays %>%
+  filter(!is.na(stage)) %>% #filtrer stage markeret NA ud
+  filter(!(stage == "")) %>% #filtrer tomme stage ud
+  count(docTitle, year, name = "antal_stage") -> antal_stage)
+
+# Tæl antal <speaker_stage>
+(plays %>%
+  filter(!is.na(speaker_stage)) %>% #filtrer speaker_stage markeret NA ud
+  filter(!(speaker_stage == "")) %>% #filtrer tomme speaker_stage ud
+  count(docTitle, year, name = "antal_speaker_stage") -> antal_speaker_stage)
+```
+# Visualisering af optællingerne
+
+```{r}
+antal_rækker %>% 
+  ggplot(aes(y = rækker, x = str_c(year, " ", str_sub(docTitle,0,16)))) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Alle stykker",
+      subtitle = "Antal Rækker"
+    ) +
+  xlab("Stykke") +
+  ylab("Antal Rækker i JSonl Filen")
+ggsave(here("graphs/read-plays", "Optælling_af_rækker.pdf"))
+
+antal_replikker %>% 
+  ggplot(aes(y = replikker, x = str_c(year, " ", str_sub(docTitle,0,16)))) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Alle stykker",
+      subtitle = "Antal Replikker"
+    ) +
+  xlab("Stykke") +
+  ylab("Antal Replikker i stykket")
+ggsave(here("graphs/read-plays", "Optælling_af_replikker.pdf"))
+
+antal_ord %>% 
+  ggplot(aes(y = words, x = str_c(year, " ", str_sub(docTitle,0,16)))) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "Alle stykker",
+      subtitle = "Antal Ord"
+    ) +
+  xlab("Stykke") +
+  ylab("Antal sagte ord")
+
+ggsave(here("graphs/read-plays", "Optælling_af_ord.pdf"))
+```
+
+# Indlæsning af en enkelt JSONL fil til R
+
+Der har været noget bøvl med titler på stykkerne, som sjældent er hvad vi forventer, hvis de altså overhovedet er der, derfor har vi indført en funktion, som indlæser et enkelt stykke fra JSONL filen.
+Titlerne skulle fungere nu, men det er stadig rart med en funktion, som indlæser et enkelt stykke.
+
+```{r}
+#Funtionen her henter det skuespil, der er i den navngavne JSONL fil
+read_play_jsonl(here(my_dir, "Den_Vaegelsindede_1731_mod.jsonl")) -> play
+play #se den tbl, der nu er last ind i play
+
+```
+
+Og så tager vi lige den med antal replikker igen!
+
+
+```{r}
+# Tæl antal rækker
+play %>% count(name = "# rækker")
+
+# Tæl antal replikker
+play %>%
+  filter(!is.na(spoke)) %>% #filtrer replikker markeret NA ud
+  filter(!(spoke == "")) %>% #filtrer tomme replikker ud
+  count(name = "# replikker")
+
+# Tæl antal regibemærkninger
+# bemærk de findes på to niveauer, så i første omgang tæller vi dem hver for sig
+# Tæl antal <stage>
+play %>%
+  filter(!is.na(stage)) %>% #filtrer stage markeret NA ud
+  filter(!(stage == "")) %>% #filtrer tomme stage ud
+  count(name = "# stage")
+# Tæl antal <speaker_stage>
+play %>%
+  filter(!is.na(speaker_stage)) %>% #filtrer speaker_stage markeret NA ud
+  filter(!(speaker_stage == "")) %>% #filtrer tomme speaker_stage ud
+  count(name = "# speaker_stage")
+```
+

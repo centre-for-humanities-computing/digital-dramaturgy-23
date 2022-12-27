@@ -1,0 +1,245 @@
+---
+title: "Analysis of the auto and manual generated gender and mask tables"
+author: "pmd"
+date: '2021-09-18'
+output:
+  pdf_document: default
+  html_notebook: default
+---
+Get the libraries loaded
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(here)
+library(fs)
+source(here("src", "p017-functions.R"))
+```
+
+# Load the old manual annotated Excel sheet
+
+```{r}
+excel_sheet <- read_excel(here("allspeakers_gender_and_mask.xlsx"))
+```
+```{r}
+glimpse(excel_sheet)
+```
+
+remove the `...1` column, split the `plays` column into one new row for each play by duplicating the complete row as many times, as there are plays. This assumes that no play uses comme in the title. At last rename the `plays` column into `play` as that column no longer contains multiple plays per row. 
+
+```{r}
+excel_sheet %>% 
+  select(-`...1`) %>% # hvor kommer denne kolonne fra?
+  separate_rows(plays,sep = ",") %>% 
+  rename(play = plays) -> manual
+```
+
+```{r}
+glimpse(manual)
+```
+
+So we have 619 combinations of speaker and play from the Excel sheet.
+
+# Generate the auto-table
+
+First load all plays from the project
+
+```{r}
+read_plays_jsonl(here("test-data")) -> allplays
+```
+
+```{r}
+glimpse(allplays)
+```
+
+group by speaker and play (and rename the `docTitle` to `play` to match the `manual` table)
+
+```{r}
+allplays %>% 
+  filter(!is.na(speaker) & speaker != "") %>% 
+  count(speaker,docTitle) %>% 
+  rename(play = docTitle) -> auto
+```
+
+# Compare the two tables
+
+```{r}
+glimpse(auto)
+```
+
+```{r}
+glimpse(manual)
+```
+This is a problem. The number of rows should be the same. We need to figure out, where that error comes from.
+
+Start by looking at a full join to analyse what's in one and not the other, as that functions retains all rows in both tables.
+
+```{r}
+auto %>% 
+  select(speaker, play) %>% 
+  mutate(source = "auto") %>% 
+  full_join(
+    manual %>% 
+      select(speaker, play) %>% 
+      mutate(source = "manual"),
+    by = c("speaker", "play")) -> compare_tables
+compare_tables
+```
+
+How many combinations of speaker and play is in both tables:
+
+```{r}
+compare_tables %>% 
+  filter(!is.na(source.x) & !is.na(source.y)) %>% 
+  count()
+```
+
+That was a smalle number!!
+
+How many distinct speakers in the `auto` table?
+
+```{r}
+auto %>% 
+  distinct(speaker) %>% 
+  count()
+```
+
+And how many in the `manual`table
+
+```{r}
+manual %>% 
+  distinct(speaker) %>% 
+  count()
+```
+
+What's only in `auto`?
+
+```{r}
+auto %>% 
+  select(speaker) %>% 
+  setdiff(manual %>% select(speaker))
+```
+
+Do'h! Capital letters!!!
+
+Create new tables with alle speakers and play titles down cased
+
+```{r}
+allplays %>% 
+  filter(!is.na(speaker) & speaker != "") %>%
+  rename(play = docTitle) %>% 
+  mutate(
+    speaker = str_to_lower(speaker),
+    play = str_to_lower(play)
+  ) %>% 
+  count(speaker,play) -> auto_decapitalized
+
+manual %>% 
+  mutate(
+    speaker = str_to_lower(speaker),
+    play = str_to_lower(play)
+  ) -> manual_decapitalized
+```
+
+```{r}
+auto_decapitalized %>% 
+  select(speaker) %>% 
+  setdiff(manual_decapitalized %>% select(speaker))
+```
+
+Okay, we still have der 99 in `auto`, that are missing from `manual`. Why?
+
+```{r}
+manual %>% 
+  filter(str_detect(speaker, "borger"))
+```
+
+From where originates "1. borger"?
+
+```{r}
+auto_decapitalized %>% 
+  filter(str_detect(speaker, "1. borger"))
+
+```
+
+So, is "mester gert westphaler eller den meget talende barber komedie" missing from the `manual` data?
+
+```{r}
+manual %>% 
+  filter(str_detect(play, "westphaler"))
+```
+
+Yes!! But why?
+
+Okay, can we get a list of all the plays in `auto`, that are not in `manual`?
+
+```{r}
+auto_decapitalized %>% 
+  select(play) %>% 
+  setdiff(manual_decapitalized %>% select(play))
+```
+
+What about the other way around? I.e. plays only in `manual`
+
+```{r}
+manual_decapitalized %>% 
+  select(play) %>% 
+  setdiff(auto_decapitalized %>% select(play))
+```
+
+Okay, we have a problem with e.g. "Jeppe…". Look for that play in `manual`
+
+```{r}
+manual_decapitalized %>% 
+  distinct(play) %>% 
+  filter(str_detect(play, "jeppe"))
+```
+Oh, two different "Jeppe…" plays. How weird! They have the same capitalizations. But, what about leading and ending spaces? Let's count the length of the two play titles:
+
+
+```{r}
+manual_decapitalized %>% 
+  distinct(play) %>% 
+  filter(str_detect(play, "jeppe")) %>% 
+  mutate(str_len = str_length(play))
+```
+
+Hey! Could it be the split on comma, that retains the space after the comma??
+
+```{r}
+manual_decapitalized %>% 
+  mutate(play = str_trim(play)) %>% 
+  distinct(play) %>% 
+  filter(str_detect(play, "jeppe")) %>% 
+  mutate(str_len = str_length(play))
+```
+
+Yes! That fixed that problem! Make a new `manual`table
+
+```{r}
+manual_decapitalized %>% 
+  mutate(play = str_trim(play)) -> manual_decapitalized_trimmed
+```
+
+Okay, do we still have plays in `manual` that are not in `auto`?
+
+```{r}
+manual_decapitalized_trimmed %>% 
+  select(play) %>% 
+  setdiff(auto_decapitalized %>% select(play))
+```
+
+Yes, we do. 
+So, four plays in manual that are not in auto?
+
+Aha! The two last plays are actually ONE play with a comma in the title!!
+
+```{r}
+excel_sheet %>% 
+  mutate(plays = str_to_lower(plays)) %>% 
+  filter(str_detect(plays, "ligbeg")) %>% 
+  select(plays) %>% pull(plays)
+```
+
+
+To mitigate this problem we need to hand edit the Excel sheet by manually separating the rows with the troublesome title combinations, i.e. manually create the new rows by splitting the plays column by hand for the plays, that have a comma in their title.

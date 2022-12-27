@@ -1,0 +1,682 @@
+---
+title: "Netværksgraf"
+output: html_notebook
+author: baj
+---
+
+SCRATCH
+
+# Netværk
+Opdel alle på titel, akt og scene.
+Vi vil gerne nå frem til en grafisk fremstilling af netværk.
+
+5. Find karakterer med replikker, der taler med hinanden – hele stykket.
+   a. Graduer efter, hvor mange ord, de siger til hinanden.
+   b. Talende karakter: det skal visuelt fremgå, dvs hvem der taler mest.
+6. Find karakterer, der taler med hinanden – opdelt i akt og scene.
+   a. Graduer efter, hvor mange ord, de siger til hinanden.
+
+Jf Frank Fischer – “taler med hinanden” defineres som karakterer, der taler i en scene. Moretti – definerer ift karakterer, der taler efter hinanden. Vi starter med Fischer.
+
+Before we start, we need to load the needed R packages
+
+HUSK første gang
+install.packages("xslt")
+install.packages("tidytext")
+install.packages("ggraph")
+osv
+
+```{r, message=FALSE}
+library(here)
+library(xml2)
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+library(xslt)
+library(tidytext)
+library(ggraph)
+library(igraph)
+R version 3.6.3 (2020-02-29) -- "Holding the Windsock"
+Copyright (C) 2020 The R Foundation for Statistical Computing
+Platform: x86_64-redhat-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+[Workspace loaded from ~/Projects/P017_R_Project/.RData]
+
+> 
+￼
+Environment
+Files
+Plots
+Help
+￼
+￼			
+￼
+￼			
+￼
+￼			
+￼	￼
+￼			
+￼Search help￼
+￼	￼
+￼			
+￼
+R: Subset columns using their names and types
+￼
+Find in Topic￼
+￼
+￼	
+netvaerksgraf.Rmd
+￼
+￼	
+visualisering-ord-sagt.Rmd
+￼
+￼	
+til_stede_uden_replikker.Rmd
+￼
+￼	
+testing-read_plays_jsonl.Rmd
+￼
+￼
+￼			
+￼
+￼			
+￼	￼
+￼			
+￼	￼
+￼			
+￼	￼
+￼			
+￼
+￼			
+￼		￼
+￼	
+Preview
+￼
+￼	
+￼
+￼
+￼			￼
+￼
+￼	
+Insert
+￼
+￼		￼
+￼			
+￼
+￼			
+￼								￼
+￼	
+Run
+￼
+￼	
+￼
+￼			
+￼
+￼			
+￼	￼
+￼			
+158:67
+￼	
+Chunk 8￼
+R Markdown￼
+￼
+￼
+828384858687888990919293949596979899100101102103127128129130131132133134135136137138139140141142143
+   se evt. visualisering-ord-sagt
+```{r}
+## Distinct speakers in each scene in each act grouped by act and scene
+(play %>%
+  filter(!is.na(speaker)) %>% #filtrer speaker markeret NA ud
+  filter(!(speaker == "")) %>% #filtrer tomme speaker ud
+  filter(!is.na(spoke)) %>% #filtrer replikker markeret NA ud
+  filter(!(spoke == "")) %>% #filtrer tomme replikker ud
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% #tæl antal ord i hver replik
+  select(speaker, n_spoken_words, act_number, scene_number) %>% 
+  group_by(speaker, act_number, scene_number) %>% 
+  summarise(words = sum(n_spoken_words)) -> distinct_speakers_play)
+(distinct_speakers_play %>%
+  select(speaker) %>% group_by(speaker) %>% distinct -> nodes_play)
+```
+# Sammenlæg forskellige stavemåde af samme rolle
+Den her skal laves for hvert enkelt skuespil.
+Eksemplerne her er Barselsstuen og "Den_Vaegelsindede_1731_mod_nc.jsonl"
+```{r}...```
+```{r}
+## Sammenlæg forskellige stavemåde af samme rolle "Den_Vaegelsindede_1731_mod_nc.jsonl"
+distinct_speakers_play
+(distinct_speakers_play %>%
+  # count all versions of Apicius as one
+    mutate(
+    speaker = if_else(speaker %in% c("Apicius", "Apicius ("), "Apicius", speaker)) %>%
+   # count all versions of Eraste as one
+    mutate(
+    speaker = if_else(speaker %in% c("Eraste", "Eraste (alene)"), "Eraste", speaker)) -> distinct_speakers_play)
+## All distinct speakers in play are the nodes
+(distinct_speakers_play %>%
+    ungroup() %>%
+    select(speaker) %>%
+     distinct() %>% 
+ 
+￼￼￼
+IGRAPH 321b98e DN-- 5 6 -- 
++ attr: name (v/c)
++ edges from 321b98e (vertex names):
+[1] Bob      ->Alice Cecil    ->Bob   Cecil    ->Alice David    ->Alice David    ->Bob   Esmeralda->Alice
+R Console
+￼
+￼
+￼￼￼
+[1] "/home/baj/Projects/P017_R_Project"
+R Console
+filename
+<chr>
+act
+<chr>
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	
+Next123456...75Previous
+1-10 of 741 rows | 1-2 of 14 columns
+tbl_df
+741 x 14
+filename
+<chr>
+act
+<chr>
+act_number
+<dbl>
+docTitle
+<chr>
+index
+<dbl>
+scene
+<chr>
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	1	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	2	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	3	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	4	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	5	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	6	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	7	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	8	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	9	Scene 1	
+Den_Vaegelsindede_1731_mod_nc.jsonl	Første akt	1	Den vægelsindede Komedie i 3 akter	10	Scene 1	
+Next123456...75Previous
+1-10 of 741 rows | 1-6 of 14 columns
+￼￼￼
+`summarise()` regrouping output by 'speaker', 'act_number' (override with `.groups` argument)
+Adding missing grouping variables: `act_number`
+R Console
+speaker
+<chr>
+act_number
+<dbl>
+scene_number
+<dbl>
+words
+<int>
+2. musikant	2	16	11	
+Apicius	2	2	402	
+Apicius	2	3	284	
+Apicius	2	4	131	
+Apicius	2	8	524	
+Apicius	2	9	99	
+Apicius	2	14	188	
+Apicius	3	1	99	
+Apicius	3	2	81	
+Apicius	3	3	56	
+Next123456...8Previous
+1-10 of 72 rows
+grouped_df
+72 x 4
+act_number
+<dbl>
+speaker
+<chr>
+2	2. musikant			
+2	Apicius			
+3	Apicius			
+2	Apicius (			
+2	Christopher			
+3	Christopher			
+3	Drengen			
+2	Eraste			
+3	Eraste			
+2	Eraste (alene)			
+Next123Previous
+1-10 of 30 rows
+grouped_df
+30 x 2
+act_number
+<dbl>
+speaker
+<chr>
+2	2. musikant			
+2	Apicius			
+3	Apicius			
+2	Apicius (			
+2	Christopher			
+3	Christopher			
+3	Drengen			
+2	Eraste			
+3	Eraste			
+2	Eraste (alene)			
+Next123Previous
+1-10 of 30 rows
+￼￼￼
+speaker
+<chr>
+act_number
+<dbl>
+scene_number
+<dbl>
+words
+<int>
+2. musikant	2	16	11	
+Apicius	2	2	402	
+Apicius	2	3	284	
+Apicius	2	4	131	
+Apicius	2	8	524	
+Apicius	2	9	99	
+Apicius	2	14	188	
+Apicius	3	1	99	
+Apicius	3	2	81	
+Apicius	3	3	56	
+Next123456...8Previous
+1-10 of 72 rows
+grouped_df
+72 x 4
+speaker
+<chr>
+act_number
+<dbl>
+scene_number
+<dbl>
+words
+<int>
+2. musikant	2	16	11	
+Apicius	2	2	402	
+Apicius	2	3	284	
+Apicius	2	4	131	
+Apicius	2	8	524	
+Apicius	2	9	99	
+Apicius	2	14	188	
+Apicius	3	1	99	
+Apicius	3	2	81	
+Apicius	3	3	56	
+Next123456...8Previous
+1-10 of 72 rows
+grouped_df
+72 x 4
+id
+<int>
+speaker
+<chr>
+1	2. musikant			
+2	Apicius			
+3	Christopher			
+4	Drengen			
+5	Eraste			
+6	Espen			
+7	Helene			
+8	Henrik			
+9	Lakajen			
+10	Leonore			
+Next12Previous
+1-10 of 14 rows
+tbl_df
+14 x 2
+id
+<int>
+speaker
+<chr>
+1	2. musikant			
+2	Apicius			
+3	Christopher			
+4	Drengen			
+5	Eraste			
+6	Espen			
+7	Helene			
+8	Henrik			
+9	Lakajen			
+10	Leonore			
+Next12Previous
+1-10 of 14 rows
+￼￼￼
+ [1] "2. musikant" "Apicius"     "Apicius"     "Apicius"     "Apicius"     "Apicius"     "Apicius"     "Apicius"     "Apicius"    
+[10] "Apicius"     "Apicius"     "Apicius"     "Christopher" "Christopher" "Christopher" "Christopher" "Christopher" "Drengen"    
+[19] "Eraste"      "Eraste"      "Eraste"      "Eraste"      "Eraste"      "Eraste"      "Eraste"      "Espen"       "Espen"      
+[28] "Espen"       "Espen"       "Espen"       "Espen"       "Helene"      "Helene"      "Helene"      "Helene"      "Helene"     
+[37] "Helene"      "Henrik"      "Henrik"      "Henrik"      "Henrik"      "Henrik"      "Henrik"      "Henrik"      "Henrik"     
+[46] "Henrik"      "Henrik"      "Henrik"      "Lakajen"     "Leonore"     "Leonore"     "Leonore"     "Leonore"     "Leonore"    
+[55] "Lucretia"    "Lucretia"    "Lucretia"    "Lucretia"    "Lucretia"    "Lucretia"    "Lucretia"    "Lucretia"    "Lucretia"   
+[64] "Musikant"    "Pernille"    "Pernille"    "Pernille"    "Pernille"    "Pernille"    "Petronius"   "Petronius"   "Petronius"  
+R Console
+speaker
+<chr>
+act_number
+<dbl>
+scene_number
+<dbl>
+words
+<int>
+speaker2
+<chr>
+2. musikant	2	16	11	2. musikant
+Apicius	2	2	402	Apicius
+Apicius	2	3	284	Apicius
+Apicius	2	4	131	Apicius
+Apicius	2	8	524	Apicius
+Apicius	2	9	99	Apicius
+Apicius	2	14	188	Apicius
+Apicius	3	1	99	Apicius
+Apicius	3	2	81	Apicius
+Apicius	3	3	56	Apicius
+Next123456...8Previous
+1-10 of 72 rows
+grouped_df
+72 x 5
+act_number
+<dbl>
+speaker
+<chr>
+speaker2
+<chr>
+2	2. musikant	2. musikant		
+2	Apicius	Apicius		
+3	Apicius	Apicius		
+2	Christopher	Christopher		
+3	Christopher	Christopher		
+3	Drengen	Drengen		
+2	Eraste	Eraste		
+3	Eraste	Eraste		
+2	Espen	Espen		
+3	Espen	Espen		
+Next123Previous
+1-10 of 28 rows
+grouped_df
+28 x 3
+from
+<chr>
+to
+<chr>
+2. musikant	2. musikant			
+Apicius	Apicius			
+Christopher	Christopher			
+Drengen	Drengen			
+Eraste	Eraste			
+Espen	Espen			
+Helene	Helene			
+Henrik	Henrik			
+Lakajen	Lakajen			
+Leonore	Leonore			
+Next12Previous
+1-10 of 14 rows
+tbl_df
+14 x 2
+from
+<chr>
+to
+<chr>
+2. musikant	2. musikant			
+Apicius	Apicius			
+Christopher	Christopher			
+Drengen	Drengen			
+Eraste	Eraste			
+Espen	Espen			
+Helene	Helene			
+Henrik	Henrik			
+Lakajen	Lakajen			
+Leonore	Leonore			
+Next12Previous
+1-10 of 14 rows
+￼￼￼
+￼
+library(tidygraph)
+```
+
+We also need to load the functions created for this project. This is done by `source`-ing them.
+
+```{r}
+source(here("src", "p017-functions.R"))
+```
+
+# Vi starter med et eksempel...
+
+```{r}
+
+## A simple example with a couple of actors
+## The typical case is that these tables are read in from files....
+actors <- data.frame(name=c("Alice", "Bob", "Cecil", "David",
+                            "Esmeralda"))
+relations <- data.frame(from=c("Bob", "Cecil", "Cecil", "David", "David", "Esmeralda"),
+                        to=c("Alice", "Bob", "Alice", "Alice", "Bob", "Alice"))
+g <- graph_from_data_frame(relations, directed=TRUE, vertices=actors)
+print(g, e=TRUE, v=TRUE)
+
+t <- tbl_graph(nodes = actors, edges = relations, directed = TRUE, node_key = "name")
+
+ggraph(t, layout = 'randomly') + 
+    geom_edge_link(aes(start_cap = label_rect(node1.name),
+                       end_cap = label_rect(node2.name))) + 
+      geom_node_text(aes(label = name))
+
+```
+
+# Read play
+We look at one play at a time.
+(Look at read-plays.Rmd for help)
+
+```{r}
+here()
+convert_TEI_to_JSONL(here("test-data"))
+(read_play_jsonl(here("test-data", "Den_Vaegelsindede_1731_mod_nc.jsonl")) -> play)
+```
+
+# Find Nodes (speakers)
+And find weights of nodes:
+   b. Talende karakter: det skal visuelt fremgå hvem der taler mest, det vil sige vi tæller ord.
+   se evt. visualisering-ord-sagt
+
+```{r}
+## Distinct speakers in each scene in each act grouped by act and scene
+(play %>%
+  filter(!is.na(speaker)) %>% #filtrer speaker markeret NA ud
+  filter(!(speaker == "")) %>% #filtrer tomme speaker ud
+  filter(!is.na(spoke)) %>% #filtrer replikker markeret NA ud
+  filter(!(spoke == "")) %>% #filtrer tomme replikker ud
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% #tæl antal ord i hver replik
+  select(speaker, n_spoken_words, act_number, scene_number) %>% 
+  group_by(speaker, act_number, scene_number) %>% 
+  summarise(words = sum(n_spoken_words)) -> distinct_speakers_play)
+
+(distinct_speakers_play %>%
+  select(speaker) %>% group_by(speaker) %>% distinct -> nodes_play)
+```
+# Sammenlæg forskellige stavemåde af samme rolle
+Den her skal laves for hvert enkelt skuespil.
+Eksemplerne her er Barselsstuen og "Den_Vaegelsindede_1731_mod_nc.jsonl"
+
+```{r}
+## Sammenlæg forskellige stavemåde af samme rolle Barselsstuen
+(distinct_speakers_play %>%
+  # count all versions of Troels as one
+  mutate(
+    speaker = if_else(speaker %in% c("Troels", "Trols"), "Troels", speaker)) %>%
+  # count all versions of Barselskvinden as one
+  mutate(
+    speaker = if_else(speaker %in% c("Barselskonen", "Barselskvinden", "Barselsqvinde"), "Barselskvinden", speaker)) %>% 
+  # Count all versions of kællingen as one
+  mutate(
+    speaker = if_else(speaker %in% c("Kælling", "Kællingen"), "Kællingen", speaker)) %>% 
+  # Count all versions of Pigen as one
+  mutate(
+    speaker = if_else(speaker %in% c("En pige", "Pigen"), "Pigen", speaker)) %>%
+  distinct(speaker) -> distinct_speakers_play)
+
+## All distinct speakers in play are the nodes
+(distinct_speakers_play %>%
+    ungroup() %>%
+    select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_play) # add id column
+```
+```{r}
+## Sammenlæg forskellige stavemåde af samme rolle "Den_Vaegelsindede_1731_mod_nc.jsonl"
+distinct_speakers_play
+(distinct_speakers_play %>%
+  # count all versions of Apicius as one
+    mutate(
+    speaker = if_else(speaker %in% c("Apicius", "Apicius ("), "Apicius", speaker)) %>%
+   # count all versions of Eraste as one
+    mutate(
+    speaker = if_else(speaker %in% c("Eraste", "Eraste (alene)"), "Eraste", speaker)) -> distinct_speakers_play)
+
+## All distinct speakers in play are the nodes
+(distinct_speakers_play %>%
+    ungroup() %>%
+    select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_play) # add id column
+  
+```
+
+# Find Edges
+TODO And find weights for the edges
+5. Find karakterer med replikker, der taler med hinanden – hele stykket.
+   a. Graduer efter, hvor mange ord, de siger til hinanden.
+   “taler med hinanden” defineres som karakterer, der taler i samme scene.
+
+```{r}
+# we would like an edge for each pair of speakers in each scene in each act
+## That is every combination of speakers within each group
+
+#create column 'speaker2' and make it equal to 'speaker' (duplicate).
+(distinct_speakers_play$speaker2 = distinct_speakers_play$speaker)
+(distinct_speakers_play %>% select(!words)
+# All possible combinations (remember the data is still grouped by act-number and scene-number)
+(distinct_speakers_play %>% 
+  expand(speaker, speaker2) -> who_speaks_to_whom)
+
+(who_speaks_to_whom  %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_play)
+
+```
+# Draw Graph
+
+```{r}
+# now we can draw a graph like this
+gr <- tbl_graph(nodes = nodes_play, edges = edges_play, directed = TRUE, node_key = "speaker")
+
+title <- play %>%
+  select(filename) %>%
+  distinct()%>% pull()
+
+ggraph(gr, layout = 'kk') + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker), size = 3) + 
+    labs(caption = str_c("Netværksgraf ", title))
+
+```
+
+
+WORK IN PROGRESS
+
+Det er muligvis nemmere at vægte kanterne, og så vægte knuderne efter antal kanter?!
+
+# TODO b. Talende karakter: det skal visuelt fremgå, dvs hvem der taler mest.
+# TODO Nu kommer alt det spændende arbejde med at gøre grafen pæn :)
+
+Vi kan også prøve at lave grafer for hver scene eller hver akt i stykket...
+# 6. Find karakterer, der taler med hinanden – opdelt i akt og scene.
+
+```{r}
+## Første Akt
+distinct_speakers_Barselstuen %>%
+  filter(act_number == 1) %>%
+  select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_act1
+
+who_speaks_to_whom %>%
+  filter(act_number == 1) %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_act1
+
+gr <- tbl_graph(nodes = nodes_act1, edges = edges_act1, directed = TRUE, node_key = "speaker")
+
+ggraph(gr) + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = "Netværksgraf Barselstuen Første Akt")
+
+## Andet Akt
+distinct_speakers_Barselstuen %>%
+  filter(act_number == 2) %>%
+  select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_act2
+
+who_speaks_to_whom %>%
+  filter(act_number == 2) %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_act2
+
+gr <- tbl_graph(nodes = nodes_act2, edges = edges_act2, directed = TRUE, node_key = "speaker")
+
+ggraph(gr) +     ungroup() %>%
+
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = "Netværksgraf Barselstuen Andet Akt")
+
+## Tredje Akt
+distinct_speakers_Barselstuen %>%
+  filter(act_number == 3) %>%
+  select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_act3
+
+who_speaks_to_whom %>%
+  filter(act_number == 3) %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_act3
+
+gr <- tbl_graph(nodes = nodes_act3, edges = edges_act3, directed = TRUE, node_key = "speaker")
+
+ggraph(gr) + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = "Netværksgraf Barselstuen Tredje Akt")
+
+```
+

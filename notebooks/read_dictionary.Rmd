@@ -1,0 +1,103 @@
+---
+title: "Holbergordbogen"
+output: html_notebook
+author: pmd
+---
+
+```{r}
+library(tidyverse)
+library(here)
+```
+
+```{r}
+2+2
+```
+
+# Advarsel
+
+Kør kun denne notebook, hvis du har god tid eller en stor og stærk maskine.
+
+
+# Undersøgelse af Holbergordbogen
+
+Der er ca. 30.000 linier med liniestruktureret XML. Det kan vi hacke
+
+```{r}
+lines <- read_lines(here("data/holbergordbog_v1.xml"))
+length(lines)
+# [1] 31122
+```
+
+```{r}
+ordbog <- tibble(line = lines)
+```
+
+Jeg snyder her med `rowwise()`, men det ændrer jeg senere...
+
+```{r}
+tibble(line = lines)  %>% 
+   rowwise() %>% 
+   mutate(opslag = str_match(line, "første=\"(\\w+?)\"")[[2]])  %>% 
+   select(opslag, everything()) -> ordbog
+
+ordbog %>%
+    head(3)
+
+```
+
+```{r}
+s <- "'foo1' 'bar1' 'bax2'"
+s
+str_match(s,"'[a-z1-9 ]+'")
+```
+
+Den næste tager ret lang tid, så lad endelig være med at køre dette :-)
+
+```{r}
+ordbog
+# # A tibble: 31,122 x 2
+# # Rowwise: 
+#    opslag     line                                                              
+#    <chr>      <chr>                                                             
+#  1 <NA>       "<?xml version=\"1.0\" encoding=\"UTF-8\"?><DOC>"                 
+#  2 a          "<Artikel EntryID=\"66000080\" OriginalID=\"81\" bind=\"1\" først…
+#  3 a          "<Artikel EntryID=\"66000081\" OriginalID=\"82\" bind=\"1\" først…
+#  4 a          "<Artikel EntryID=\"66000082\" OriginalID=\"83\" bind=\"1\" først…
+#  5 A          "<Artikel EntryID=\"66000079\" OriginalID=\"80\" bind=\"1\" først…
+#  6 aa         "<Artikel EntryID=\"66000002\" OriginalID=\"3\" bind=\"1\" første…
+#  7 Aa         "<Artikel EntryID=\"66000001\" OriginalID=\"2\" bind=\"1\" første…
+#  8 aabe       "<Artikel EntryID=\"66000003\" OriginalID=\"4\" bind=\"1\" første…
+#  9 aaben      "<Artikel EntryID=\"66000004\" OriginalID=\"5\" bind=\"1\" første…
+# 10 aabenbaned "<Artikel EntryID=\"66000005\" OriginalID=\"6\" bind=\"1\" første…
+# # … with 31,112 more rows
+```
+
+```{r}
+ordbog %>% 
+  filter(str_detect(opslag, "Troels")) %>% 
+    pull(line)
+
+```
+
+
+På den måde, kan man grave de interessante informationer ud af filen.
+
+Har vi et problem med danske bogstaver?
+
+```{r}
+ordbog %>% 
+  filter(str_detect(opslag, "ø")) %>% 
+  pull(line)
+```
+
+```{r}
+ordbog %>% 
+  filter(str_detect(opslag, "^[gG]r.*nd"))
+```
+
+Problemet med manglende resultater for de danske bogstaver, skyldes at `opslag` kolonnen ikke inkluderede disse bogstaver i sit søgeudtryk. Dette er der nu rettet op på.
+
+```{r}
+ordbog %>% 
+  filter(str_detect(opslag, "Grønland"))
+```

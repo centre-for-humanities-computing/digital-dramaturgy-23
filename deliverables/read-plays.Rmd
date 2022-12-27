@@ -1,0 +1,183 @@
+---
+title: "How do we read plays into R?"
+output: html_notebook
+author: pmd
+---
+
+The plays that we are working with are in a TEI-format. However, R does not have a standard method to read TEI, which is why we convert the TEI-files to a format more suitable for R. Here, we choose JSONL, although there are a number of formats to choose from. In JSONL, each line is in itself a valid piece of JSON, while the file as a whole is not. This means that each line can be read into R on its own.
+
+To make the conversion to JSONL simple, we have written two short R functions: One that converts all TEI-files inside a folder, and one that reads all JSONL-files in the folder into R.
+
+This notebook shows you how to use these functions.
+
+Before we start, we need to load the necessary packages into R.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+library(xslt)
+```
+
+The two functions for converting to and reading JSONL are defined in the file `src/p017-functions.R`, which we read into R in the following way:
+
+```{r}
+source(here("src", "p017-functions.R"))
+```
+
+# Conversion of TEI-files from a folder
+
+We have placed two test-TEI-files in the folder `test-data`, to test the conversion from TEI to JSONL. You can also run the function on the entire `data/holberg-komedier-nc`, which is the folder with all the comedy-files.
+You can write the directory of your choice to the `my-dir`-variable. 
+
+
+```{r}
+my_dir <-"test-data"
+dir_ls(here(my_dir))
+```
+
+To convert the two files in `test-data`, we use the following function:
+
+```{r}
+convert_TEI_to_JSONL(here(my_dir))
+```
+
+If you now take a look the the folder `data/holberg-komedier-nc`, you will see that the two new test-files have been added:
+
+```{r}
+dir_ls(here(my_dir))
+```
+
+# Reading JSONL-files into R
+
+We can now read the converted JSONL test-files into R by using the following function, saving the output in the variable "plays":
+
+```{r}
+read_plays_jsonl(here(my_dir)) -> plays
+
+```
+
+Now, let us have a look at the plays that we have read into R. Let us try to count the number of lines in each play. However, since lines can be both lines of characters and stage directions, let us distinguish between the two. Let's count the number of all lines, the number of character-lines, the number of words spoken by characters, and the number of stage directions.
+
+```{r}
+# Count the number of lines in the plays.
+# Note that if we use the title of each play to identify the comedies, we will be merging different versions of each play into one. To avoid that, we use the full title (docTitle) or add the year (year).
+(plays %>% 
+  count(docTitle, year, name = "rækker") -> antal_rækker)
+
+# Count the number of character-lines:
+(plays %>%
+  filter(!is.na(spoke)) %>% # Filter out lines that are marked NA
+  filter(!(spoke == "")) %>% # Filter out empty lines
+  count(docTitle, year, name = "replikker") -> antal_replikker)
+
+# Count the number of words in the play that are spoken by characters:
+(plays %>%
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>%
+  # Remove rows that are not character-lines
+  filter(!is.na(spoke)) %>%
+  # Add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  # Group the play in scene_index and speaker, ignoring the test
+  group_by(docTitle, year) %>% 
+  # Sum the words spoken by each speaker
+  summarise(words = sum(n_spoken_words), docTitle, year) %>%
+  distinct() -> antal_ord)
+
+# Count number of lines that are stage directions
+# Note that they can be found on two levels, preceded in the JSONL by <stage> or <speaker_stage>. Let us count the number of stage directions in each of these. 
+# Count the number of directions marked <stage>
+(plays %>%
+  filter(!is.na(stage)) %>% # Filter out lines that are marked NA 
+  filter(!(stage == "")) %>% # Filter out empty lines
+  count(docTitle, year, name = "antal_stage") -> antal_stage)
+
+# Count the number of directions marked <speaker_stage>
+(plays %>%
+  filter(!is.na(speaker_stage)) %>% # Filter out lines that are marked NA 
+  filter(!(speaker_stage == "")) %>% # Filter out empty lines
+  count(docTitle, year, name = "antal_speaker_stage") -> antal_speaker_stage)
+```
+
+# Visualize these counts:
+
+```{r}
+antal_rækker %>% 
+  ggplot(aes(y = rækker, x = str_c(year, " ", str_sub(docTitle,0,16)))) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "All Plays",
+      subtitle = "Number of Rows"
+    ) +
+  xlab("Play") +
+  ylab("Number of Rows in the JSONL-file")
+ggsave(here("graphs/read-plays", "Optælling_af_rækker.pdf"))
+
+antal_replikker %>% 
+  ggplot(aes(y = replikker, x = str_c(year, " ", str_sub(docTitle,0,16)))) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "All plays",
+      subtitle = "Number of Character-lines"
+    ) +
+  xlab("Play") +
+  ylab("Number of Character-lines in the Play")
+ggsave(here("graphs/read-plays", "Optælling_af_replikker.pdf"))
+
+antal_ord %>% 
+  ggplot(aes(y = words, x = str_c(year, " ", str_sub(docTitle,0,16)))) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0)) +
+    geom_bar(stat="identity") +
+    theme(legend.position="bottom") +
+    labs(
+      title = "All Plays",
+      subtitle = "Number of words"
+    ) +
+  xlab("Play") +
+  ylab("Number of spoken words")
+
+ggsave(here("graphs/read-plays", "Optælling_af_ord.pdf"))
+```
+
+# Read in a single JSONL-file into R
+
+Sometimes, the titles of plays are not as they should be, so we made a function to read in a single play. While the titles are now correct, it may still be helpful in some cases to read in a single play.
+
+```{r}
+# This function retrieves the play inside the JSONL file that we call
+read_play_jsonl(here(my_dir, "Den_Vaegelsindede_1731_mod.jsonl")) -> play
+play # Call "play" to see the table that has now been assigned to that variable.
+```
+
+Now we count the number of lines, character-lines and stage directions of the single play, as we did above for all plays:
+
+
+```{r}
+# Count the number of lines in the play
+play %>% count(name = "# rækker")
+
+# Count the number of character-lines
+play %>%
+  filter(!is.na(spoke)) %>% # Filter out the lines that are marked NA
+  filter(!(spoke == "")) %>% # Filter out empty lines
+  count(name = "# replikker")
+
+# Count the number of lines of stage directions. Note that they can be found on two levels, preceeded in the JSON by <stage> or by <speaker_stage>. Let us count both the number of directions in each of these. 
+# Count the number of directions marked <stage>
+play %>%
+  filter(!is.na(stage)) %>% # Filter out the lines that are marked NA
+  filter(!(stage == "")) %>% # Filter out empty lines
+  count(name = "# stage")
+
+# Count the number of directions marked by <speaker_stage>
+play %>%
+  filter(!is.na(speaker_stage)) %>% # Filter out the lines that are marked NA
+  filter(!(speaker_stage == "")) %>% # Filter out empty lines
+  count(name = "# speaker_stage")
+```
+

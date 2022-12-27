@@ -1,0 +1,149 @@
+---
+title: "Speakers"
+output: html_notebook
+author: baj
+---
+
+Netværk
+Opdel alle på titel, akt og scene.
+Vi vil gerne nå frem til en grafisk fremstilling af netværk.
+
+# Read one play and all plays into R
+Some of the following is designed for finding characteristics for one play.
+Some of the following is designed for finding characteristics across all plays.
+Load the JSONL data format
+
+```{r}
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+library(tidytext)
+library(xslt)
+library(readxl)
+
+barselstuen_raw <- ndjson::stream_in(here("test-data/Barselstuen_mod.jsonl")) %>% tibble()
+
+source(here("src", "p017-functions.R"))
+
+read_plays_jsonl (here("test-data")) ->allplays
+```
+
+# Looking at the data
+
+```{r}
+ barselstuen_raw
+```
+Vi kan også gemme jsonl filen som csv direkte:
+
+```{r}
+ write.csv(barselstuen_raw, file = here("csv/barselstuen_speakers.csv"))
+
+```
+
+##Find navne på alle karakterer med replikker.
+Tæl alle navngivne karakterer med replikker.
+
+Vi kan lave en liste af speakers. Antallet vil så bare være længden af listen - med det forbehold at nogle af dem i listen muligvis er den samme. Det kan være vi kan bruge ordbogen til at lægge nogle af dem sammen...
+
+Vi kan også lave et skema med speakers opdelt på akt og scene...
+
+```{r}
+here()
+
+all_speakers <- allplays %>% 
+  count(speaker)
+all_speakers
+# get column names
+colnames(all_speakers)
+write.csv(all_speakers, file = here("csv/allspeakers.csv"))
+
+#skal kun bruges, når vi kører ét stykke ad gangen
+speakers_by_scene <- allplays %>% 
+  count(act, scene, speaker)
+speakers_by_scene
+write.csv(speakers_by_scene, file = here("csv/speakers_by_scene.csv"))
+```
+Next we load and run the excel sheet
+```{r}
+(variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    ))
+# "sammenlæg navnevarianter" (se "use-excel-for-name-variants.Rmd")
+# Husk at bruge Filnavn
+(allplays %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+      filter(!is.na(speaker), !(speaker=="")) %>%
+distinct -> allplays)
+
+all_speakers <- allplays %>% 
+  count(speaker)
+all_speakers
+# get column names
+colnames(all_speakers)
+write.csv(all_speakers, file = here("csv/allspeakers uden navnevarianter.csv"))
+
+```
+##Find alle stykker, som karaktererne er med i
+
+Kan vi tilføje en kolonne, hvor antallet af stykker, karaktererne er med i, bliver talt op?
+
+```{r}
+all_speakers_with_plays <- allplays %>% 
+  count(speaker, docTitle, year) %>%
+  group_by(speaker) %>%
+  mutate(count_speaker = sum(n)) %>%
+  count(docTitle, count_speaker) %>%
+  summarise(plays = toString(unique(docTitle)), count_speaker, count_plays = sum(n)) %>%
+  unique()
+all_speakers_with_plays
+
+write.csv(all_speakers_with_plays, file = here("csv/allspeakers uden navnevarianter med stykker.csv"))
+
+```
+##Find navne på alle karakterer, som kun nævnes i regibemærkninger.
+Tæl karakterer, som kun nævnes i regibemærkninger.
+
+Til at starte med kan vi finde alle regi-bemærkninger. De findes i <stage> og <speaker_stage>.
+
+```{r}
+# <stage>
+all_stage_instructions <- barselstuen_raw %>%
+  select(stage) %>% filter(!is.na(stage))
+all_stage_instructions
+# write.csv(all_stage_instructions, file = here("output/barselstuen_all_stage_instructions.csv"))
+
+# <speaker-stage>
+all_speaker_stage_instructions <- barselstuen_raw %>%
+  select(speaker_stage) %>% filter(!is.na(speaker_stage))
+all_speaker_stage_instructions
+
+# combine vectors
+combined_stage_vector <- c(as.vector(all_stage_instructions[['stage']]), as.vector(all_speaker_stage_instructions[['speaker_stage']]))
+combined_stage_vector
+write.csv(combined_stage_vector, here("output/barselstuen_combined_stage_instructions.csv"))
+
+# <stage> by <scene>
+stage_instructions_by_scene <- barselstuen_raw %>%
+  select(act, scene, stage) %>% filter(!is.na(stage))
+stage_instructions_by_scene
+write.csv(stage_instructions_by_scene, file = here("output/barselstuen_stage_instructions_by_scene.csv"))
+
+# <speaker-stage> by <scene>
+speaker_stage_instructions_by_scene <- barselstuen_raw %>%
+  select(act, scene, speaker_stage) %>% filter(!is.na(speaker_stage))
+speaker_stage_instructions_by_scene
+write.csv(speaker_stage_instructions_by_scene, file = here("output/barselstuen_speaker_stage_instructions_by_scene.csv"))
+
+```
+
+Der er altså 131 + 54 = 185 regibemærkninger i dette stykke. Vi mangler at finde karaktererne. Det kan gøres med et søge-udtryk, hvis vi ved hvad vi skal søge efter. 
+Vi kan søge efter de karakterer,vi fandt i <speaker>, men så kan det være at vi misser nogen, som er til stede, men ikke taler.
+Vi kan finde dem med manuelt arbejde.
+Vi kan måske bruge ordbogen.
+

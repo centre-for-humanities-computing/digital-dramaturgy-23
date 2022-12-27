@@ -1,0 +1,172 @@
+---
+title: "Netværksgraf 2"
+author: "Bolette A. Jurik"
+date: "10/2/2021"
+output: html_notebook
+---
+
+This version uses the functions in "graph_functions.R".
+
+First we load the libraries and source the functions.
+```{r, message=FALSE}
+library(here)
+library(xml2)
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+library(xslt)
+library(tidytext)
+library(ggraph)
+library(igraph)
+library(tidygraph)
+
+source(here("src", "p017-functions.R"))
+source(here("src", "graph_functions.R"))
+source(here("src", "present_without_speech.R"))
+```
+Now we are ready to build the graph using the functions.
+Put the name of the file to use in "my_file".
+
+# Find speakers
+```{r}
+my_file <- "Mascarade_mod.jsonl"
+(read_play_jsonl(here("test-data", my_file)) -> play)
+(find_speakers(play) -> distinct_speakers)
+```
+Så er der det maed at sammenlægge forskellige stavemåde af samme rolle.
+Det er forskelligt for hver skuespil. Det kan vi i princippet også lave funtioner for, så jeg har lavet et eksempel:
+```{r}
+(join_speakers_mascarade(distinct_speakers) -> distinct_speakers)
+```
+# Find Nodes
+All distinct speakers in play are the nodes.
+```{r}
+  (speakers2nodes(distinct_speakers) -> nodes)
+```
+# Find Black Edges
+5. Find karakterer med replikker, der taler med hinanden – hele stykket.
+```{r}
+(find_edges(distinct_speakers) -> edges)
+```
+# Draw first graph
+We can now draw the same graph we drew in 'netvaerksgraf.Rmd'
+```{r}
+gr1 <- tbl_graph(nodes = nodes, edges = edges, directed = TRUE, node_key = "speaker")
+
+ggraph(gr1, layout = 'kk') + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = paste("Netværksgraf", my_file))
+```
+# Find the characters that are present but do not speak
+```{r}
+(present_without_speech(play) -> present_but_silent)
+```
+# Find RED edges    group_by(act_number, scene_number)  %>%
+
+This is a little different, as we now want edges to all the silent characters from all the speaking characters.
+Example: 
+
+distinct_speakers
+A tibble:87 x 3   Groups:act_number, scene_number [32]
+speaker   act_number    scene_number
+Leander	1	1		
+Henrik	1	1		
+...
+Jeronimus	1	7		
+Leander	1	7		
+...
+Leonard	2	5	
+Jeronimus	2	5	
+...
+Leander	3	2	
+Leonora	3	2	
+Pernille	3	2	
+...
+Jeronimus	3	12	
+Leander	3	12	
+Leonora	3	12	
+Leonard	3	12	
+...
+
+present_but_silent
+A tibble:6 x 4
+act   scene   index   word
+Første akt	Scene 7	1	henrik	
+Anden akt	Scene 5	1	henrik	
+Tredje akt	Scene 2	1	henrik	
+Tredje akt	Scene 12	1	pernille	
+Første akt	Scene 7	7	henrik	
+Tredje akt	Scene 2	7	henrik
+
+Ok, vi skal lave present_but_silent om, så vi har act_number og scene_number i stedet for act og scene, 
+og så kan vi droppe index, og vi skal huske at gruppere.
+
+Øv nu har jeg ødelagt funktionen i "present_without_speech.R".
+Det kommer vi tilbage til.
+
+Det jeg gerne vil, er "henrik" er til stede i "present_but_silent" i Første Akt, Scene 7, så skal alle der taler i act_number 1, scene_number 7 forbindes til Henrik, dvs. Jeronimus og Leander, altså
+
+act_number    scene_number    speaker   word
+1 7 Jeronimus henrik
+1 7 Leander henrik
+
+Jeg kan lave den i hånden denne gang, for at illustrere:
+Hov, der er også noget med Stort og lille forbogstav!
+
+```{r}
+tribble(
+  ~act_number, ~scene_number,  ~speaker, ~word,
+  1, 7, "Jeronimus", "Henrik",
+  1, 7, "Leander", "Henrik",
+  2, 5, "Jeronimus", "Henrik",
+  2, 5, "Leander", "Henrik",
+  3, 2, "Leander", "Henrik",
+  3, 2, "Leonora", "Henrik",
+  3, 2, "Pernille", "Henrik",
+  3, 12, "Jeronimus", "Pernille",
+  3, 12, "Leander", "Pernille",
+  3, 12, "Leonora", "Pernille",
+  3, 12, "Leonard", "Pernille"
+) -> who_hears_who
+
+(who_hears_who %>%
+  select(from = word, to = speaker) %>%
+  distinct() -> red_edges)
+```
+# Second graph
+We can now try drawing a graph with just the red edges:
+```{r}
+gr2 <- tbl_graph(nodes = nodes, edges = red_edges, directed = TRUE, node_key = "speaker")
+
+ggraph(gr2, layout = 'kk') + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker)),
+                   edge_colour = "red") + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = paste("Silent Netværksgraf", my_file))
+
+```
+
+# Third graph
+And we can try drawing both sets of edges
+```{r}
+gr1 %>% graph_join(gr2) %>% 
+    ggraph(layout = 'kk') + 
+    geom_edge_link() + 
+    geom_node_text(aes(label = speaker)) + 
+    ggtitle('Joining graphs') + 
+    theme_graph()
+```
+Men nu røg den røde farve, så vi skal lave det på en lidt anden måde!
+
+
+```{r}
+# we have the 'distinct_speakers', which are grouped by act_number and scene_number
+# we have the 'present_but_silent' characters also grouped by act_number and scene_number
+# we should be able to join them
+
+```
+

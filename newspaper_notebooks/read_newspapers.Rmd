@@ -1,0 +1,27 @@
+---
+title: "Read Newspapers"
+output: html_notebook
+---
+First we load the library:
+
+```{r, message=FALSE}
+library(tidyverse)
+library(here)
+library(xml2)
+library(jpeg)
+```
+Now we have three types of files. Let's try reading them directly from the testdata directory
+(We have to learn to read them from HDFS too!).
+```{r}
+(txt_file <- read_file(here("test-data","aviser", "berlingsketidende_17491121_page_3.txt")))
+(xml_file <- read_xml(here("test-data/aviser/berlingsketidende_17491121_page_3.xml")))
+
+jpg_file <- readJPEG(here("test-data/aviser/berlingsketidende_17491121_page_3.jpg"), TRUE)
+require(grDevices)
+## set up the plot region:
+op <- par(bg = "thistle")
+plot(c(0, 4620), c(0, 2620), type = "n", xlab = "", ylab = "")
+rasterImage(jpg_file, 0, 0, 1540, 2620)
+
+```
+

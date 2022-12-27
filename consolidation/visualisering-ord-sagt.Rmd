@@ -1,0 +1,246 @@
+---
+title: "Visualisering af antal sagte ord"
+output: html_notebook
+author: pmd
+---
+
+Før vi begynder, skal vi indlæse de nødvendige udvidelsespakker og projektspecifikke funktioner.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(here)
+library(ndjson)
+library(xslt)
+library(fs)
+library(ggplot2)
+
+require(readr)  # for read_csv()
+require(purrr)  # for map(), reduce()
+
+source(here("src/p017-functions.R"))
+source(here("src/visalisering_ord_sagt_functions.R"))
+
+calc_scene_index <- function(act_number, scene_number, act_length) {
+   ifelse(is.numeric(scene_number),
+      scene_number + ifelse(act_number==1, 0, act_length[act_number-1]),
+      NA
+   )
+}
+```
+
+Opsætning af de tabeller, som er fælles for alle stykker
+
+```{r}
+# create a table of name variants
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+     unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+
+# load the gender and mask table. Change the file name to load another file
+gender_and_mask <- read_excel(
+  here("gender AND Mask_alaw sammenlagte karakterer 14122021.xlsx"), 
+  sheet = "gender AND Mask_alaw sammenlagt"
+)
+
+# load the class colors. Change the file name to load another file
+social_class <- read_excel(
+    here("gender AND Mask_alaw sammenlagte karakterer 14122021.xlsx"), 
+    sheet = "Social Status pmd" # Which sheet should be used for the colors
+  ) %>% 
+  rename(
+    "class" = `...1`,
+    "m" = "Male",
+    "f" = "Female") %>% 
+  select(class,m,f) %>% 
+  gather("gender", "color",2:3) %>%
+  mutate(class_gender = str_c(class,"_",gender)) %>%
+  select(class_gender, color) -> social_class_colors
+## A tibble: 30 x 2
+#   class_gender               color 
+#   <chr>                      <chr> 
+# 1 NA                         NA    
+# 2 Bourgeoisie_m              blue  
+# 3 Artisans_m                 green 
+# 4 Merchants_m                purple
+# 5 Servants_m                 yellow
+# 6 Academic_m                 black 
+# 7 Peasantry_m                brown 
+# ...
+
+# add colors to the speakers
+gender_and_mask %>%
+  mutate(
+    class_combined = if_else(
+      is.na(`social status, main character`),
+      `social status, other characters`,
+      `social status, main character`
+    )
+  ) %>% 
+  mutate(class_combined_gender = str_c(class_combined, "_", gender)) %>% 
+  left_join(
+    social_class_colors,
+    by = c("class_combined_gender" = "class_gender")) %>% 
+  select(class_combined_gender, color, speaker, gender, play, ) %>% 
+  select(play, speaker, color) -> speaker_colors_all_plays
+```
+
+# Lav et diagram over hvor meget der bliver sagt for et enkelt stykke
+
+Vælg hvilket stykke
+
+```{r}
+# my_file <- "GertWestphaler1724_mod.jsonl" 
+# my_file <- "Bondedreng_mod.jsonl" 
+ my_file <- "Mascarade_mod.jsonl"
+# my_file <- "Barselstuen_mod.jsonl"
+# my_file <- "Ulysses_mod.jsonl"
+# my_file <- "uden_hoved_og_hale_mod.jsonl"
+# my_file <- "Skibbrud_mod.jsonl"
+# my_file <- "Sganarel_mod.jsonl"
+# my_file <- "Republiqven_mod.jsonl"
+# my_file <- "Ranudo_mod.jsonl"
+# my_file <- "Plutus_mod.jsonl"
+# my_file <- "Philosophus_mod.jsonl"
+# my_file <- "Pernille_mod.jsonl"
+# todo den her virker ikke: my_file <- "Nytaarsprolog_mod.jsonl"
+# my_file <- "Melampe_mod.jsonl"
+# my_file <- "Ligbeg_mod.jsonl"
+# my_file <- "Kilde-Reysen_mod.jsonl"
+# my_file <- "Kandst_mod.jsonl" todo udfordring med 1. og 2. <w>rådsherreinde</w>
+# my_file <- "Juele-Stue_mod.jsonl"
+# todo den her virker heller ikke: my_file <- "JJ_Bet_1723_mod.jsonl"
+# my_file <- "Jeppe_mod.jsonl"
+# my_file <- "Jean_de_France_mod.jsonl"
+# my_file <- "Jacob_von_Tyboe_mod.jsonl"
+# my_file <- "Hexerie_mod.jsonl"
+# my_file <- "Henrick_og_Pernille_mod.jsonl"
+# my_file <- "GertWestphaler1723_mod.jsonl"
+# my_file <- "Erasmus_mod.jsonl"
+#my_file <- "Diderich_mod.jsonl"
+# my_file <- "Det_Arabiske_Pulver_mod.jsonl"
+# my_file <- "Den_Vaegelsindede_1731_mod.jsonl"
+# my_file <- "De_u-synlige_mod.jsonl"
+# my_file <- "Den_Vaegelsindede_1723_mod.jsonl"
+# my_file <- "Den_Stundesloese_mod.jsonl"
+# my_file <- "Den_Honnette_Ambition_mod.jsonl"
+# my_file <- "Den_11_Junii_mod.jsonl"
+# my_file <- "Brudgom_mod.jsonl"
+# my_file <- "Abracadabra_mod.jsonl"
+```
+
+
+```{r}
+my_play <- read_play_jsonl(here("test-data", my_file))
+
+# use the name variants
+my_play %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  distinct -> my_play
+
+# calculate a list for the calculation of scene index
+my_play %>% 
+   group_by(act_number)  %>% 
+   summarise(scenes = max(scene_number)) %>% 
+   pull(scenes) %>% cumsum() -> act_length
+
+# calculate the number of sub-graphs, i.e. the total number of scenes in all acts
+no_columns <- last(act_length)
+
+# extract play title
+my_play %>% 
+  select(docTitle) %>% 
+  distinct() %>%
+  pull(1,1) -> my_title
+
+# extract play year
+my_play %>% 
+  select(year) %>% 
+  distinct() %>%
+  pull(1,1) -> my_year
+
+# create the named vector with the color fill information
+speaker_colors_all_plays %>% 
+  filter(play == tolower(my_title)) %>% 
+  select(speaker, color) -> speaker_colors
+
+fill_speaker_colors <- as.character(speaker_colors$color)
+names(fill_speaker_colors) <- speaker_colors$speaker
+
+# make the play table ready for the plot
+my_play %>% 
+  # add a scene index for the x-axis
+  rowwise() %>% 
+  mutate(scene_index = calc_scene_index(act_number, scene_number, act_length)) %>% 
+ 
+   # remove rows that are not dialogue
+  filter(act != "", scene != "", !is.na(spoke)) %>%
+  
+  # select only the columns, that we are interested in
+  select(scene_index, act_number, scene_number, speaker, spoke) %>% 
+  
+  # add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  # remove the actual spoken words
+  select(-spoke) %>%
+  
+  # group the play in scene_index and speaker
+  group_by(scene_index, act_number, scene_number, speaker) %>% 
+
+  # Ensure that each speaker only appears once in each scene, i.e. sum the words spoken by each speaker
+  summarise(words = sum(n_spoken_words), act_number, scene_number) %>%
+  distinct() -> my_play
+
+# generate the plot
+my_play %>% 
+  ggplot(aes(fill = speaker, y = words, x = scene_index)) +
+    geom_bar(stat="identity", width = 100) +
+    theme(legend.position="bottom") +
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Hvor meget siger hvem",
+      caption = "Kilde: DSL",
+      fill = "Rolle"
+    ) +
+    xlab("Akt og scene") +
+    ylab("Antal sagte ord") + 
+    scale_fill_manual(values = fill_speaker_colors) +
+    scale_x_discrete(labels = NULL, breaks = NULL) +
+    facet_wrap(act_number~scene_number, ncol=no_columns, strip.position = "top")+
+    theme(axis.text.x=element_blank())
+    
+ggsave(here("graphs_consolidation/visualisering-ord-sagt", paste0(my_file, ".hvor_meget_siger_hvem.pdf")), width=16, height=9)
+```
+
+Dette samme plot lavet herunder med automatiske fyldningsfarver
+
+```{r}
+# generate the plot
+my_play %>% 
+  ggplot(aes(fill = speaker, y = words, x = scene_index)) +
+    geom_bar(stat="identity", width = 100) +
+    theme(legend.position="bottom") +
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Hvor meget siger hvem",
+      caption = "Kilde: DSL",
+      fill = "Rolle"
+    ) +
+    xlab("Akt og scene") +
+    ylab("Antal sagte ord") + 
+    #scale_fill_manual(values = fill_speaker_colors) +
+    scale_x_discrete(labels = NULL, breaks = NULL) +
+    facet_wrap(act_number~scene_number, ncol=no_columns, strip.position = "top")+
+    theme(axis.text.x=element_blank()) #+
+    #scale_x_continuous(aes(scene_index, breaks = new_act))
+    #theme(panel.grid.major.x = element_line(color = "gray10", size = .5))
+    #geom_vline(aes(xintercept = line), new_act)
+    ggsave(here("graphs_consolidation/visualisering-ord-sagt", paste0(my_file, ".hvor_meget_siger_hvem.pdf")), width=16, height=9)
+```
+

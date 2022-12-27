@@ -1,0 +1,103 @@
+---
+title: "comparing-auto-and-manual'"
+author: "TAJE"
+date: "2021-09-24"
+output: html_document
+---
+
+Loading libraries
+```{r}
+library(tidyverse)
+library(readxl)
+library(here)
+library(fs)
+source(here("src", "p017-functions.R"))
+```
+
+Load the manual excelsheet
+```{r}
+excel_sheet <- read_excel(here("allspeakers_gender_and_mask.xlsx"))
+```
+
+```{r}
+excel_sheet %>% 
+  select(-`...1`) %>% # hvor kommer denne kolonne fra?
+  separate_rows(plays,sep = ",") %>% 
+  rename(play = plays) -> manual
+```
+
+Load the auto
+
+```{r}
+read_plays_jsonl(here("test-data")) -> allplays
+```
+
+```{r}
+allplays %>% 
+  filter(!is.na(speaker) & speaker != "") %>% 
+  count(speaker,docTitle) %>% 
+  rename(play = docTitle) -> auto
+```
+
+Create new tables with all speakers and play titles down cased
+
+```{r}
+allplays %>% 
+  filter(!is.na(speaker) & speaker != "") %>%
+  rename(play = docTitle) %>% 
+  mutate(
+    speaker = str_to_lower(speaker),
+    play = str_to_lower(play)
+  ) %>% 
+  count(speaker,play) -> auto_decapitalized
+
+manual %>% 
+  mutate(
+    speaker = str_to_lower(speaker),
+    play = str_to_lower(play)
+  ) -> manual_decapitalized
+```
+
+Delete spaces:
+```{r}
+manual_decapitalized %>% 
+  mutate(play = str_trim(play)) -> manual_decapitalized_trimmed
+```
+
+So which combinations of speaker and play are only in manual and not in auto?
+```{r}
+manual_decapitalized_trimmed %>%
+  select(speaker, play) %>%
+  setdiff(auto_decapitalized %>% select(speaker, play))
+```
+So 85 combinations that are not in auto.
+
+And which combinations of speaker and play are only in manual and not in auto?
+```{r}
+auto_decapitalized %>% 
+  select(speaker, play) %>% 
+  setdiff(manual_decapitalized_trimmed %>% select(speaker, play))
+```
+142 combinations that are not in manual.
+
+Try to combine the two tables
+
+```{r}
+auto_decapitalized %>% 
+  mutate(in_auto = TRUE) %>% 
+  full_join(
+    manual_decapitalized_trimmed %>%
+      mutate(in_manual = TRUE),
+    by = c("speaker","play")
+  ) %>% 
+  mutate(
+    in_auto = !is.na(in_auto),
+    in_manual = !is.na(in_manual)
+  ) %>% 
+  select(speaker, play, in_auto, in_manual, everything()) -> gender_and_mask
+```
+
+```{r}
+write_excel_csv2(gender_and_mask,here("gender-and-mask.csv"))
+```
+

@@ -1,0 +1,88 @@
+---
+title: "Dramatic transitions"
+output: html_notebook
+author: baj
+---
+
+# Our questions for the plays of Holberg
+
+To examine dramatic transitions in Holberg's plays, we will try to find :
+the first line in each scene
+the last line in each scene
+
+# From TEI to JSONL
+
+As we described in the notebook "How to read plays into R", we used the XLS conversion to convert our files in TEI-format to JSONL-format, since this format is more suitable for R.
+
+# Read a play into R
+
+Load the play from the folder into JSONL-format.
+Load the JSONL data format
+
+```{r}
+library(tidyverse)
+library(ndjson)
+library(here)
+
+source(here("src", "p017-functions.R"))
+
+my_dir <-"test-data"
+my_play <- "Plutus_mod.jsonl"
+read_play_jsonl(here(my_dir, my_play)) -> play
+play # Call "play" to see the table that has now been assigned to that variable.
+
+```
+
+## Find the first sentence in each scene.
+
+```{r}
+  # Create a new variable to store first sentences in scenes, that we will now extract.
+first_sentence <- play %>%
+  # Use group_by to examine the play scene by scene.
+ group_by(act_number, scene_number) %>%
+  # Filter out all lines that are not character-lines (such as stage directions).
+ filter(!is.na(spoke)) %>%
+  # To get all lines in each scene in order, we sort our data by each group (scene).
+ arrange(index, .by_group = TRUE) %>%
+  # Create a new index in each group that reflects the right order, each starting with the first line of each scene.
+ mutate(group_row_num = row_number()) %>%
+  # Keep only the first line in each group, so that we have only the first line of all of our scenes.
+ filter(group_row_num == 1) %>%
+  # Lastly, remove the index again - it is no longer needed.
+ select(- group_row_num )
+
+first_sentence
+```
+
+We have to save the result. 
+Also, when saving it, remember to change the name of the file so we do not overwrite the play itself.
+
+```{r}
+write.csv(first_sentence, file = here("graphs/Første og sidste sætning sagt/first_sentence_Plutus.csv"))
+```
+
+Surely, we can extract the last sentences of all scenes in the same way?
+
+```{r}
+  # Create a new variable to store last sentences, which we will now extract.
+last_sentence <- play %>%
+  # Use group_by to examine the play scene by scene.
+ group_by(act_number, scene_number) %>%
+  # Filter out all lines that are not character-lines (such as stage directions).
+ filter(!is.na(spoke)) %>%
+  # Again, we sort our data by group, but now we want it in the reverse order, so the last sentences of each scene to come first.
+ arrange(desc(index), .by_group = TRUE) %>%
+  # Again, create a new index in each group that reflects the right order, each now starting with the last line of each scene.
+ mutate(group_row_num = row_number()) %>%
+  # Keep only the first line in each group, so that we have only the last line of all of our scenes.
+ filter(group_row_num == 1) %>%
+  # Lastly, remove the index again - it is no longer needed.
+ select(- group_row_num )
+
+write.csv(last_sentence, file = here("graphs/Første og sidste sætning sagt/last_sentence_Plutus.csv"))
+```
+
+
+
+
+

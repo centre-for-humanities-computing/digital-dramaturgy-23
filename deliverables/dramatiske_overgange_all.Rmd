@@ -1,0 +1,53 @@
+---
+title: "Dramatic transitions of all plays"
+output: html_notebook
+author: baj
+---
+
+We can use the "read_play_function.R" to read in all plays and then the "dramatiske_overgange_functions.R" to find the first and the last line in each scene.
+
+# Preparation
+
+```{r}
+library(here)
+source(here("src", "p017-functions.R"))
+source(here("src", "dramatiske_overgange_functions.R"))
+
+# The above functions convert all plays to JSONL. When looking at the files and number of files in the following line of code, we will only read in plays that are in JSONL (suffixed by ".josnl").
+json_file_list <- list.files(here("test-data"), pattern = "*.jsonl")
+length(json_file_list)
+head(json_file_list)
+
+```
+
+Note that not all .page-files are correctly converted to JSONL. You may have to remove some files in your "test-data" folder before running this notebook.
+
+# Dramatic transitions of all plays
+
+```{r}
+
+play <- read_play_jsonl(here("test-data",json_file_list[1]))
+play
+
+all_first <- first_sentence_func(play)
+all_first
+
+all_last <- last_sentence_func(play)
+all_last
+
+for(i in 2:length(json_file_list)) {
+  print(json_file_list[i])
+  play <- read_play_jsonl(here("test-data",json_file_list[i]))
+  play
+  all_first <- bind_rows(all_first, first_sentence_func(play))
+  all_last <- bind_rows(all_last, last_sentence_func(play))
+}
+
+all_first
+all_last
+
+write.csv(all_first, file = here("csv/all_first_sentences.csv"))
+write.csv(all_last, file = here("csv/all_last_sentences.csv"))
+
+```
+

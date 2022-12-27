@@ -1,0 +1,154 @@
+---
+title: "Updating the allspeakers_gender and mask sheet"
+output: html_notebook
+date: 2021-09-09
+author: pmd
+---
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(here)
+library(fs)
+```
+
+Husk også de projektspecifikke R funtkioner
+
+```{r}
+source(here("src", "p017-functions.R"))
+```
+
+
+# Indledning
+
+Det vi har brug for:
+
+ - DONE indlæse arket
+ - finde Bolettes kode
+ - ændre Bolettes kode til tidy format
+ - vi skal sikre at vi kan oprette arket, tilføje manuelle data og genopdatere arket i R
+ - kombinerer vores udgave med den oprindelige
+ 
+# Spørgsmål
+
+ - Hvad er en "speaker" i regnearket?
+
+# Indlæsning af de manuelle data
+
+
+```{r}
+#manual_all_plays <- read_excel("/Users/tanjajessen/Desktop/R ting/allspeakers_gender_and_mask.xlsx")
+manual_all_plays <- read_excel(here("allspeakers_gender_and_mask.xlsx"))
+```
+```{r}
+manual_all_plays
+```
+
+# Bolettes kode
+# Sandkasse
+
+```{r}
+read_csv(here("output/find_speakers/barselstuen_speakers.csv")) %>% 
+        filter(is.na(speaker)) %>% 
+        select(speaker_stage) %>% 
+        filter(!is.na(speaker_stage))
+```
+## Calculate the automatic table
+
+Oprindelig kode fra Bolette
+
+```{r}
+read_plays_jsonl (here("test-data")) -> allplays
+```
+
+
+```{r}
+allplays %>% 
+  count(speaker, docTitle, year) %>%
+  group_by(speaker) %>%
+  mutate(count_speaker = sum(n)) %>%
+  count(docTitle, count_speaker) %>%
+  summarise(plays = toString(unique(docTitle)), count_speaker, count_plays = sum(n)) %>%
+  unique()
+```
+
+Vi skal ikke gruppere på `speaker`
+
+```{r}
+allplays %>% 
+        count(speaker, docTitle) %>% 
+        rename(plays = docTitle)-> auto_all_plays
+auto_all_plays
+# Her er der kommet en del komedier ind i starten uden nogen speaker
+```
+
+# Kombiner de to ark
+
+Vi har denne struktur fra det manuelle ark:
+
+```
+# A tibble: 343 x 10
+    ...1 speaker plays count mask  gender `main character… `Dramaturgic fu… Notes
+   <dbl> <chr>   <chr> <dbl> <chr> <chr>  <chr>            <lgl>            <chr>
+ 1     1 .       ARTA…     1 NA    NA     NA               NA               Bole…
+ 2     2 1.      Den …     8 NA    NA     NA               NA               Bole…
+ 3     3 1. adv… Bars…    87 Acad… m      NA               NA               NA  
+```
+
+og denne automatisk skabte tabel
+
+```
+# A tibble: 600 x 3
+   speaker               docTitle                                         n
+   <chr>                 <chr>                                        <int>
+ 1 1.                    Den politiske kandestøber Komedie                8
+ 2 1. advokat            Barselsstuen Komedie                            28
+ 3 1. advokat            Den politiske kandestøber Komedie               22
+```
+
+Vi skal først have `manual_all_plays` på "tidy" form, dvs. splittet plays, som er en komma adskilt liste, op i en række pr. stykke, samtidig med at vi bibeholder alle kolonner efter `count`.
+
+```{r}
+manual_all_plays <- manual_all_plays %>% 
+        separate_rows(plays,sep = ",") %>% 
+        select(-`...1`) # hvor kommer denne kolonne fra?
+manual_all_plays
+```
+Vi kan nu — måske — flette de to tabeller
+
+```{r}
+auto_all_plays %>% 
+        left_join(manual_all_plays, by = c("speaker", "plays")) -> joined_all_plays
+joined_all_plays
+```
+
+```{r}
+glimpse(.Last.value)
+```
+
+Find fejlene. Hvorfor er der forskellig antal rækker og kolonner?
+- Der er en kolonne "count" i den ene og en kolonne "n" i den anden tabel. 
+- så 3 i den ene, 9 i den anden. to er ens, så det passer med de 10 kolonner
+
+- Er der kommet nye filer ind?
+
+Hvis man sammenligner fx hvor mange gange "Barselssuen Komedie" optræder, så er det 58 gange i auto_all_plays og kun 43 gange i manual_all_plays:
+```{r}
+(auto_all_plays %>% filter(plays == "Barselsstuen Komedie"))
+(manual_all_plays %>% filter(plays == "Barselsstuen Komedie"))
+```
+
+Hvilke rækker er kommet til?
+
+```{r}
+(speaker_auto <- auto_all_plays %>% select(speaker))
+(speaker_manual <- manual_all_plays %>% select(speaker))
+#anti_join(speaker_auto, speaker_manual)
+```
+
+Hvor mange speakers er der i auto_all_plays, hvis rækkerne uden speaker trækkes fra?
+```{r}
+nas_or_empty <- which(is.na(auto_all_plays$speaker)|auto_all_plays$speaker == "")
+length(nas_or_empty)
+```
+Hvilke optræder så i auto, men ikke i manual?

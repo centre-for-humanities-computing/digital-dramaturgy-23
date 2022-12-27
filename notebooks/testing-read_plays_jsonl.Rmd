@@ -1,0 +1,27 @@
+---
+title: "Testing read_plays_jsonl"
+output: html_notebook
+---
+
+
+```{r}
+# Load the XSL tranformations
+  stripSeqXSL <- read_xml(here("src","stripSeq.xslt"))
+  # TODO: add a column with all the titles
+  tei2jsonlXSL <- read_xml(here("src","tei2jsonl.xslt"))
+  
+  # convert all .page files in the "test-data/tei" directory to JSONL files
+  dir_walk(
+    here("test-data"),
+    function(filename) if (str_ends(filename,".page")) filename %>%
+      read_xml() %>%
+      xml_xslt(stripSeqXSL) %>%
+      xml_xslt(tei2jsonlXSL) %>%
+      write_file(path(path_ext_remove(filename), ext="jsonl")))
+
+read_plays_jsonl(here("test-data")) %>% select(abrTitle)
+```
+
+```{r}
+plays %>% select(abrTitle)
+```

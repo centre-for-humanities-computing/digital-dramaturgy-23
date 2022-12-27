@@ -1,0 +1,158 @@
+---
+title: "Speakers"
+output: html_notebook
+author: baj
+---
+
+# Networks
+We want to make visualizations of networks, where all speakers are divided by title, act, and scene.
+
+# Read one play and all plays into R
+We may find characteristics of just one play or of all plays together with the following lines of code.
+First, we import the required libraries and load files in JSONL-format.
+
+
+```{r}
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+library(tidytext)
+library(xslt)
+library(readxl)
+
+barselstuen_raw <- ndjson::stream_in(here("test-data/Barselstuen_mod.jsonl")) %>% tibble()
+
+source(here("src", "p017-functions.R"))
+
+read_plays_jsonl (here("test-data")) ->allplays
+```
+
+# Looking at the data
+
+```{r}
+ barselstuen_raw
+```
+
+We may save the JSONL file as a csv in the following way:
+
+```{r}
+ write.csv(barselstuen_raw, file = here("csv/barselstuen_speakers.csv"))
+
+```
+
+## Finding the names of all characters with lines
+
+Let's count all the named characters with lines in the plays.
+We can make a list of speakers, where the sum of speakers will be the length of the list - although some characters may appear in the list more than once.
+We may use the dictionary to remove the duplicates.
+
+We can also make a table of speakers divided into acts and scenes. 
+
+```{r}
+here()
+
+all_speakers <- allplays %>% 
+  count(speaker)
+all_speakers
+# Get column names
+colnames(all_speakers)
+write.csv(all_speakers, file = here("csv/allspeakers.csv"))
+
+# The below piece of code is only used when we examine one piece at a time.
+speakers_by_scene <- allplays %>% 
+  count(act, scene, speaker)
+speakers_by_scene
+write.csv(speakers_by_scene, file = here("csv/speakers_by_scene.csv"))
+```
+
+Next we load and run the excel sheet of characters in the plays:
+
+```{r}
+(variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    ))
+# Merge the variations of names to one name (see "use-excel-for-name-variants.Rmd")
+# Remember to use the file-name
+(allplays %>% 
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+      filter(!is.na(speaker), !(speaker=="")) %>%
+distinct -> allplays)
+
+all_speakers <- allplays %>% 
+  count(speaker)
+all_speakers
+# Get column names
+colnames(all_speakers)
+write.csv(all_speakers, file = here("csv/allspeakers uden navnevarianter.csv"))
+
+```
+
+## Find all plays that the characters are in
+
+Let's now add a column where we count the number of plays that each character plays a part in.
+
+
+```{r}
+all_speakers_with_plays <- allplays %>% 
+  count(speaker, docTitle, year) %>%
+  group_by(speaker) %>%
+  mutate(count_speaker = sum(n)) %>%
+  count(docTitle, count_speaker) %>%
+  summarise(plays = toString(unique(docTitle)), count_speaker, count_plays = sum(n)) %>%
+  unique()
+all_speakers_with_plays
+
+write.csv(all_speakers_with_plays, file = here("csv/allspeakers uden navnevarianter med stykker.csv"))
+
+```
+
+## Find the names of all characters who are only mentioned in the stage directions
+
+We want to count the number characters that are only mentioned in stage directions. Let's start by finding all lines of stage-directions. They are preceded by <stage> and by <speaker_stage>.
+
+```{r}
+# Find all lines preceded by <stage> and save them in the variable "all_stage_instructions"
+# Find <stage>:
+all_stage_instructions <- barselstuen_raw %>%
+  select(stage) %>% filter(!is.na(stage))
+all_stage_instructions
+# write.csv(all_stage_instructions, file = here("output/barselstuen_all_stage_instructions.csv"))
+
+# Find all lines preceded by <speaker_stage>, again, save them in the variable "all_stage_instructions"
+# Find <speaker-stage>:
+all_speaker_stage_instructions <- barselstuen_raw %>%
+  select(speaker_stage) %>% filter(!is.na(speaker_stage))
+all_speaker_stage_instructions
+
+# Combine the two vectors that we have just extracted
+combined_stage_vector <- c(as.vector(all_stage_instructions[['stage']]), as.vector(all_speaker_stage_instructions[['speaker_stage']]))
+combined_stage_vector
+write.csv(combined_stage_vector, here("output/barselstuen_combined_stage_instructions.csv"))
+
+# Let's do the same, but this time we note from which scene in the play each stage direction is taken. 
+# Find all lines preceded by <stage> by <scene> and save them in the variable "stage_instructions_by_scene"
+# Find <stage> by <scene>:
+stage_instructions_by_scene <- barselstuen_raw %>%
+  select(act, scene, stage) %>% filter(!is.na(stage))
+stage_instructions_by_scene
+write.csv(stage_instructions_by_scene, file = here("output/barselstuen_stage_instructions_by_scene.csv"))
+
+# Find all lines preceded by <speaker_stage> by <scene> and save them in the variable "stage_instructions_by_scene"
+# Find <speaker-stage> by <scene>:
+speaker_stage_instructions_by_scene <- barselstuen_raw %>%
+  select(act, scene, speaker_stage) %>% filter(!is.na(speaker_stage))
+speaker_stage_instructions_by_scene
+write.csv(speaker_stage_instructions_by_scene, file = here("output/barselstuen_speaker_stage_instructions_by_scene.csv"))
+
+```
+
+So, there are 131 + 54 = 185 lines of stage directions in this play. Yet we also want to know the names of the characters mentioned in these. 
+
+We can do that by searching for specific names - but what names do we search for? First, we can search for those characters that we found in the lines of stage directions preceded by <speaker>. However, we would miss some of those that are present, but do not speak.
+

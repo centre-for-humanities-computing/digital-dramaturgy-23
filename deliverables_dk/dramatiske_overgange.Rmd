@@ -1,0 +1,90 @@
+---
+title: "Dramatiske overgange"
+output: html_notebook
+author: baj
+---
+
+# Spørgsmål til Holbergs skrifter
+
+Find første sætning i hver scene.
+Find sidste sætning i hver scene.
+
+# From TEI to JSONL
+
+We have written an XSL transformation to transform the TEI format into JSONL, as this is a better format for reading into R.
+
+# Read a play into R
+
+Load the JSONL data format
+
+```{r}
+library(tidyverse)
+library(ndjson)
+library(here)
+
+source(here("src", "p017-functions.R"))
+
+my_dir <-"test-data"
+my_play <- "Plutus_mod.jsonl"
+read_play_jsonl(here(my_dir, my_play)) -> play
+play #se den tbl, der nu er last ind i play
+
+```
+
+##Find første sætning i hver scene.
+Hjælp fra Asger:
+
+```{r}
+first_sentence <- play %>%
+  #Group by så vi håndterer hver scene for sig
+ group_by(act_number, scene_number) %>%
+  #Filtrer alle linier som ikke er replikker fra
+ filter(!is.na(spoke)) %>%
+  # Sorter i hver gruppe, så linierne kommer i rækkefølge
+ arrange(index, .by_group = TRUE) %>%
+  # Lav et ny index i hver gruppe, startende med den første.
+  # På den måde ved jeg at den første i hver gruppe er nr 1.
+ mutate(group_row_num = row_number()) %>%
+  # Kun behold den første i hver gruppe
+ filter(group_row_num == 1) %>%
+  # Fjern gruppe index for det er ikke relevant længere
+ select(- group_row_num )
+
+first_sentence
+```
+
+Det virker. 
+Vi skal lige huske at gemme resultatet:
+OBS: husk at ændre filnavn!
+```{r}
+write.csv(first_sentence, file = here("graphs/Første og sidste sætning sagt/first_sentence_Plutus.csv"))
+```
+
+
+Mon ikke vi kan gøre noget tilsvarende for at finde den sidste sætning i hver scene?
+Hjælp fra Asger:
+
+
+```{r}
+last_sentence <- play %>%
+  #Group by så vi håndterer hver scene for sig
+ group_by(act_number, scene_number) %>%
+  #Filtrer alle linier som ikke er replikker fra
+ filter(!is.na(spoke)) %>%
+  # Sorter i hver gruppe, så linierne kommer i omvendt rækkefølge
+ arrange(desc(index), .by_group = TRUE) %>%
+  # Lav et ny index i hver gruppe, startende med den sidste.
+  # På den måde ved jeg at den sidste i hver gruppe er nr 1.
+ mutate(group_row_num = row_number()) %>%
+  # Kun behold den sidste i hver gruppe
+ filter(group_row_num == 1) %>%
+  # Fjern gruppe index for det er ikke relevant længere
+ select(- group_row_num )
+
+write.csv(last_sentence, file = here("graphs/Første og sidste sætning sagt/last_sentence_Plutus.csv"))
+```
+
+
+
+
+

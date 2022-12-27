@@ -1,0 +1,210 @@
+---
+title: "Use an excel sheet for the varations of names"
+output: html_notebook
+author: pmd
+date: 2021-03-01
+---
+
+This notebook illustrates how we might use `Rolleliste.xlsx` to handle multiple variations of the name of a character. That is, the present code is not supposed to produce anything beyond giving the reader some hints on how to use this concept. How to use this in practical terms is shown in the section "usage" in the end of this notebook.
+
+First we import the necessary R packages.
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(here)
+library(ndjson)
+library(fs)
+library(tidytext)
+```
+
+Then we will read in (source) the functions specific to this project.
+
+```{r}
+source(here("src", "p017-functions.R"))
+```
+
+# Read in the excel sheet of variations of character-names
+
+The excel sheet is supposed to be located in the root folder. The root folder is `r here()`.
+
+```{r}
+variants <- read_excel(here("Rolleliste.xlsx"))
+```
+
+The excel sheet consists of one table with three columns:
+
+* Filename: The name of the file that holds the relevant play
+* Character: The standard name of the character to be used instead of variations
+* A comma-seperated list of all variations of the name of a character (alias string)
+
+```{r}
+variants
+```
+
+## Transform the alias string to a R list
+
+To be able to use this table in R, we must transform it. Beyond splitting the list of comma-seperated variations of names so that we have one name-variation per row, we will also set everything into lower-case.
+
+The code for transforming the excel sheet looks like this:
+
+
+```{r}
+(variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+   mutate(
+     Karakter = tolower(Karakter),
+     variant = tolower(variant)))
+```
+
+# Load test-plays
+
+To illustrate how this list of name-variations may be used, we read in a couple of plays. 
+
+```{r}
+read_play_jsonl(here("test-data", "Mascarade_mod.jsonl")) -> play1
+read_play_jsonl(here("test-data", "GertWestphaler1724_mod.jsonl")) -> play2
+read_play_jsonl(here("test-data", "Barselstuen_mod.jsonl")) -> play3
+
+```
+
+For this example, we'll read in three plays.
+
+Let's see who speaks the most in these plays:
+
+```{r}
+play1 %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+
+play2 %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+
+play3 %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+
+Now we know that there are different variations of the name "barselskvinden", but how many?
+
+```{r}
+play3 %>% 
+  filter(str_starts(tolower(speaker), "bar")) %>% count(speaker)
+```
+
+However, we also know that the following variations exist in the excel sheet:
+
+```{r}
+variants %>% 
+  filter(str_starts(variant, "bar"))
+```
+
+So let us not expect a complete clean-up.
+
+# Count different variations as the same person
+
+In R, merging the variations looks like this:
+
+```{r}
+play3 %>% 
+  mutate(
+    speaker = if_else(
+      speaker %in% c(
+        "Barselskonen",
+        "Barselskvinden",
+        "Barselsqvinde"),
+      "Barselskvinden",
+      speaker)
+    ) %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+
+## Use the excel sheet to gather and merge name-variations
+
+Now we want to use the information in the excel sheet instead. We join the `variants` table with the play itself in the following way:
+
+```{r}
+play3 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("speaker"="variant")) %>% 
+  filter(str_starts(tolower(Karakter), "bar") | str_starts(speaker, "bar")) %>% 
+  count(speaker, Karakter) %>% 
+  arrange(desc(n))
+```
+
+Here we see the algorithm working: it has found that "barselskonen" is a variation of "barselskvinden". That means that we don't want to use the value of `speaker` but that of `Karakter` from now on. To do this, we substitute the value of `speaker` with that of `Karakter` in the instances where `Karakter` is different from `NA`. We do it the following way in R:
+```
+mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker))
+```
+Taken together this turns into:
+
+```{r}
+play3 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn","speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>% 
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+
+"barselskonen" is now substituted for "barselskvinden", but not "barselsqvinde".
+
+# Further examples:
+
+```{r}
+play1 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn","speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>% 
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+
+The "play1" in this example is Maskerade, in which "Leander på knæ" should turn into "leander".
+
+```{r}
+play2 %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn","speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>% 
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct %>% 
+  count(speaker) %>% 
+  arrange(desc(n))
+```
+
+# Usage
+
+If this code is to be used for analysis, you may do the following:
+
+ Remember that we need to import a library:
+ ```
+library(readxl)
+```
+ 
+
+ 1. Read in the excel sheet:
+```
+  variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+```
+
+ 2. Add this section of code to all analyses where you want to join name-variations:
+```
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct
+```
+

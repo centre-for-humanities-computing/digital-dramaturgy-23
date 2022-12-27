@@ -1,0 +1,335 @@
+---
+title: "P005 Analyse Final"
+output: html_notebook
+---
+
+
+
+```{r}
+
+##Install packages. This need to be run once only. 
+install.packages("magick")
+install.packages("sparklyr")
+install.packages("dplyr");
+install.packages("tidyverse")
+install.packages("devtools")
+install.packages("xml2")
+devtools::install_github("tidyverse/googlesheets4")
+
+```
+
+```{r}
+
+# Must be loaded at start of each session.
+
+library(tidyverse,quietly = TRUE,warn.conflicts = FALSE)
+library(sparklyr,quietly = TRUE,warn.conflicts = FALSE)
+library(dplyr,quietly = TRUE,warn.conflicts = FALSE)
+library(magick,quietly = TRUE,warn.conflicts = FALSE)
+library(googlesheets4,quietly = TRUE,warn.conflicts = FALSE)
+library(xml2,quietly = TRUE,warn.conflicts = FALSE)
+
+
+conf <- spark_config()
+#Set at vi max bruger 40 executors. Det er ca. 3/4 af clusteret og vil
+#derfor lade os lave andet
+conf$spark.dynamicAllocation.maxExecutors <- 20
+#conf$spark.sql.files.maxPartitionBytes = "2147483647"
+#conf$spark.shuffle.sasl.timeout <- '300s'
+
+#Should prevent the
+#https://community.hortonworks.com/content/supportkb/186413/errorjavaioioexception-filesystem-closed-when-runn.html
+#conf$fs.hdfs.impl.disable.cache <- TRUE
+#conf$fs.file.impl.disable.cache <- TRUE
+
+
+#Disconnect spark before connection again below
+spark_disconnect_all()
+
+#connect spark. This can take up to 30 seconds
+sc <- spark_connect(master = 'yarn-client', app_name = paste("p017_test"), config = conf)
+
+without_images <- spark_read_parquet(sc,
+                                     path="hdfs://KAC/projects/p017/30.pagesize.parquet",
+                                     name = "without_images",
+                                     overwrite = TRUE,
+                                     memory = TRUE) 
+
+
+# Utility method to get a value from a column, useful when you want to see the data in the parquet file
+# Example use, how to see the raw text, from row 2.
+#raw_text_example <-parquet.column.value((without_images) %>% head(2), "txt",2)
+parquet.column.value <- function(table, column, i) {
+  unlist((table %>% select(column) %>% collect())[i,], use.names=FALSE)
+}
+
+
+# Table that count number of pages for each year. Format is 1749, 4. (year 1749 has a total of 4 pages)
+year_count <- without_images %>% group_by(year) %>% summarize(count=n()) %>% arrange(year) %>%  collect()
+
+
+ getPageCountByYear <- function(yearFixed){
+   (year_count %>%  filter(year==yearFixed))[2]
+}
+
+##Load the google sheet
+# sheetP005 <- read_sheet(ss="https://docs.google.com/spreadsheets/d/1ceHEYW1qHlSbXGTec8a2HxW9hOf0jKZE2Fl-DW--YL0/edit?usp=sharing" ,sheet =2, range ="A1:G25")
+
+
+# Shows the newspaper image. Input name is from the name column.
+ load_imageByName <- function(name, year){#todo use year to find the right directory
+   imageFromFile <- image_read(paste0("/hdfs/projects/p017/aviser/1862-1863/",name,".jpg"))
+}
+
+  #Takes a string of comma seperated wordsand counts results by year. divides by total number to find percentage of hits that year
+ commaSeperatedSearchByYear  <- function(commaSeperated){
+  regexp <- makeRegexp(commaSeperated)
+  resultTable <- regexpSearchByYear(regexp)
+}
+ 
+ #Takes a regexp string and counts results by year. divides by total number to find percentage of hits that year
+ regexpSearchByYear  <- function(regexp){
+  year_count_for_word <-  without_images %>% filter(txt_lower %REGEXP% regexp) %>% count(year) %>%arrange(year) %>% collect()
+  year_count_and_total <-merge(x=year_count_for_word,y=year_count ,by="year") %>% collect
+  year_count_percent <- year_count_and_total %>% mutate (percent = 100*n/count) %>%  collect()
+  year_count_percent
+}
+ 
+#Takes comma seperated string of words and make to regexp for each word with lowercase. Trims spaces.
+#The text is already lowercased in the data frame
+#Example: "januar, jannar"" -> "januar|jannar""
+makeRegexp <- function(words){
+  words_lower <- tolower(words)
+  words_replaced <- str_replace_all(string = words,pattern = " ", replacement = "")
+  words_regex <- str_replace_all(string = words_replaced,pattern = ",", replacement = "|")
+  words_regex
+}
+
+extract_alto <- function(commaSeperatedWords){
+  print(commaSeperatedWords)
+  regExpWords <- makeRegexp(commaSeperatedWords)
+  print(regExpWords)
+  regExpStr <- paste0("(<String[^>]*\"(?:",regExpWords,")\"[^>]*>)+")
+  regExpStr
+  print(regExpStr)
+  without_images %>%
+  mutate(tag = regexp_extract(xml,regExpStr,1)) %>%
+  filter(length(tag) > 0) %>%
+  select(name,tag,page_height,page_width) %>% arrange(name)%>%
+  collect()
+}
+
+```
+
+
+```{r}
+#Test methods to see data is loaded
+
+#Shows the coloum names
+colnames(without_images)
+#Show data types
+sdf_schema(without_images)
+
+#count rows
+without_images %>%  tally()
+
+#see  google sheet.
+# sheetP005
+
+# show number of pages pr. year
+year_count 
+
+#See how many pages for a given year
+getPageCountByYear (1749)
+
+```
+
+
+```{r}
+#Test method for plotting (you can test it is case insensitive)
+year_table <- commaSeperatedSearchByYear('holberg')  
+# See the table
+year_table
+#Make simple plot of the table
+ggplot(year_table, aes(y=percent, x=year) ) + geom_point() +theme(axis.text.x=element_text(angle=-90,vjust = 0)) +  scale_x_continuous(breaks = c(1650,1675,1700,1725,1750,1775, 1800,1825,1850,1875))
+
+```
+
+
+
+```{r}
+#Test methods for images
+
+#show a newspaperpage (name colum is key)
+imageExample <- load_imageByName("aarhusstiftstidende_18631229_page_3")
+#show it
+imageExample
+#Meta data infor for image
+image_info(imageExample)
+image_attributes(imageExample)
+
+
+imageExample <- load_imageByName("aarhusstiftstidende_18631229_page_3")
+img <- image_draw(imageExample)
+rect(20, 20, 200, 100, border = "red", lty = "dashed", lwd = 5)
+dev.off()
+
+print(img)
+
+```
+
+
+```{r}
+#Test method for regext search in the without_images dataframe and alto extraction
+
+# comma separated words. Will search for each token. This search will take about 1 minute
+words <- "Teater, Theater"
+tableAlto <- extract_alto(words)
+#See the tableAlto under environment variables.
+
+tableAlto
+#row 2 (alto), elemtent 1
+alto1 <- tableAlto[[2]][1]
+
+alto1Xml <- read_xml(alto1)
+height <- xml_attr(alto1Xml, "HEIGHT")
+width <- xml_attr(alto1Xml, "WIDTH")
+hpos <- xml_attr(alto1Xml, "HPOS")
+vpos <- xml_attr(alto1Xml, "VPOS")
+alto1Xml
+height
+width
+hpos
+vpos
+```
+
+
+
+```{r}
+#Combining regexp search, alto extraction and image  single overlay
+# virker ikke lige nu med mappestruktur
+words <- "Thomas, thomas"
+tableAlto <- extract_alto(words)
+#See the tableAlto under environment variables.
+# see number of rows
+tableAlto  %>%  tally()
+# Just see a page (number less than number of rows)
+pageIndex <- 2
+
+#row 2 (alto), elemtent 1
+alto1 <- tableAlto[[2]][pageIndex]
+#Just a constant to convert to pixels
+altoScaleFactor <- 0.25
+
+alto1Xml <- read_xml(alto1)
+#Extract attributes and cast to integer
+height <- strtoi(xml_attr(alto1Xml, "HEIGHT"))*altoScaleFactor
+width <- strtoi(xml_attr(alto1Xml, "WIDTH"))*altoScaleFactor
+hpos <- strtoi(xml_attr(alto1Xml, "HPOS"))*altoScaleFactor
+vpos <- strtoi(xml_attr(alto1Xml, "VPOS"))*altoScaleFactor
+
+
+#Convert String to int and calculate other corners of box
+hposEnd <-hpos+width
+vposEnd <- vpos+height
+
+#hpos
+#vpos
+#hposEnd
+#vposEnd
+
+page <- tableAlto[[1]][pageIndex]  # first index is the alto column. Second index is the row number
+page
+
+
+imageExample <- load_imageByName(page)
+img <- image_draw(imageExample)
+rect(hpos, vpos, hposEnd,vposEnd, border = "red", lty = "dashed", lwd = 5)
+dev.off()
+
+print(img)
+
+```
+
+
+```{r}
+# ikke relevant
+#Combining regexp search, alto extraction and image multiple overlay
+# Only change the line below
+words <- "Januar, januar"
+
+#The height/width below must match the image
+black_image_height=6000
+black_image_width=4000
+black_image="/data/D2/p005/4000_6000_white.jpg"
+
+tableAlto <- extract_alto(words)
+#See the tableAlto under environment variables.
+# see number of rows
+
+#Just a constant to convert to pixels
+numberOfResults <- tableAlto  %>%  tally()
+print(numberOfResults);
+
+numberOfResultsInt <- strtoi(numberOfResults)
+print(numberOfResultsInt);
+
+
+altoScaleFactor <- 0.25
+
+blank_image <- image_read("/data/D2/p005/4000_6000_white.jpg")
+img <- image_draw(blank_image)
+
+
+for(indexNumber in 1:numberOfResultsInt) {
+
+    #row 2 (alto), elemtent i (from loop)
+    alto1 <- tableAlto[[2]][indexNumber]
+    alto1Xml <- read_xml(alto1)
+ 
+    page_height= tableAlto[[3]][indexNumber]*altoScaleFactor
+    page_width= tableAlto[[4]][indexNumber]*altoScaleFactor
+    
+    #Extract attributes and cast to integer
+    height <- strtoi(xml_attr(alto1Xml, "HEIGHT"))*altoScaleFactor
+    width <- strtoi(xml_attr(alto1Xml, "WIDTH"))*altoScaleFactor
+    hpos <- strtoi(xml_attr(alto1Xml, "HPOS"))*altoScaleFactor
+    vpos <- strtoi(xml_attr(alto1Xml, "VPOS"))*altoScaleFactor
+
+
+    #Convert String to int and calculate other corners of box
+    hposEnd <-hpos+width
+    vposEnd <- vpos+height
+
+    # now these are correct for page, but they need to be scaled to the relative page 4000*6000 page
+    hpos_rel = hpos * (black_image_heigh/page_height)
+    vpos_rel = vpos * (black_image_width/page_width)
+    hposEnd_rel = hposEnd * (black_image_height/page_height)
+    vposEnd_rel = vposEnd * (black_image_width/page_width)
+    
+    # Uncomment to see the relative transformation
+    #hpos
+    #vpos
+    #hposEnd
+    #vposEnd
+    #page_height
+    #page_width
+    #hpos_rel
+    #vpos_rel
+    #hposEnd_rel
+    #vposEnd_rel
+    
+    rect(hpos_rel, vpos_rel, hposEnd_rel,vposEnd_rel, border = rgb(0,0,1.0,alpha=0.1), lty = "solid", lwd = 5 )
+}
+
+dev.off()
+print(img)
+
+```
+
+
+
+
+
+
+

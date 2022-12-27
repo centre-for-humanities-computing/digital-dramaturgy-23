@@ -1,0 +1,271 @@
+---
+title: "Plots"
+output: html_notebook
+author: "baj"
+---
+
+# Plot who says what when
+
+This notebook will simply show another way of visualizing when and what characters speak in a play. 
+
+# Import libraries and read in the data
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(here)
+library(ndjson)
+#library(xslt)
+library(fs)
+library(ggplot2)
+library(knitr)
+library(dplyr)
+
+require(readr)  # We will need this to read csv files (with "read_csv()")
+require(purrr)  # We will need this to use the functions "map()" and "reduce()"
+
+source(here("src/p017-functions.R"))
+source(here("src", "present_without_speech.R"))
+
+#convert_TEI_to_JSONL(here("test-data"))
+# my_file <- "Skibbrud_mod.jsonl"
+# my_file <- "Sganarel_mod.jsonl"
+my_file <- "Barselstuen_mod.jsonl" 
+# my_file <- "Mascarade_mod.jsonl"
+my_play <- read_play_jsonl(here("test-data", my_file))
+my_play
+```
+
+
+## Variations of character-names
+
+```{r}
+
+# Read in the excel-sheet of names of characters and name-variations in the plays
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% # Collect all the names and name-variations from the excel-sheet.
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+# Use the excel-sheet to collect all variations of character-names in the play
+my_play %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct -> my_play
+```
+
+## Add an index for scene
+
+```{r, warning=FALSE, message=FALSE}
+my_play %>% 
+   group_by(act_number)  %>% 
+   summarise(scenes = max(scene_number)) %>% 
+   pull(scenes) %>% cumsum() -> act_length
+
+act_length
+
+calc_scene_index <- function(act_number, scene_number, act_length) {
+   ifelse(is.numeric(scene_number),
+      scene_number + ifelse(act_number==1, 0, act_length[act_number-1]),
+      NA
+   )
+}
+
+```
+
+## Restructure the data
+
+It will look nicer if we write it into the csv. 
+Remember to count how many characters are present.
+
+
+```{r, rows.print=20}
+my_play %>% 
+  # Add a scene index for the x-axis
+  rowwise() %>% 
+  mutate(scene_index = calc_scene_index(act_number, scene_number, act_length)) %>% 
+  # Remove rows that are not dialogue
+  filter(act != "", scene != "", speaker != "", !is.na(spoke)) %>%
+  # Make a boolean to indicate spoke
+  mutate(boolean_spoke = (if (spoke != "") {"X"} else {"Y"})) %>%
+  # Keep only coloumns that we need
+  select(act_number, scene_number, scene_index, speaker, boolean_spoke) %>%
+  distinct() -> my_summary
+
+(my_summary %>%
+  # Make a small scene_index, act_number, scene_number table
+  select(scene_index, act_number, scene_number) %>% 
+  distinct() -> my_acts_and_scenes)
+(my_acts_and_scenes %>% pull(act_number) -> my_acts)
+
+
+
+my_summary %>%
+  # Select only the columns that we are interested in
+  select(scene_index, speaker, boolean_spoke) %>% 
+  distinct() %>%
+  # Now pivot speakers to rows
+  pivot_wider(names_from = scene_index, values_from = boolean_spoke) -> my_speakers
+
+# Now remove NA
+my_speakers[is.na(my_speakers)] <- ""
+my_speakers
+
+# Write it to a new csv
+write.csv(my_speakers, file = here(paste("csv/","plot_who_speaks_", my_file, ".csv")))
+
+# Pretty print my_speakers
+# install.packages("DT") # Install DT first (only the first time you use it)
+library(DT)
+datatable(my_speakers)
+
+```
+
+
+# Plotting who speaks
+
+```{r}
+my_play %>% 
+  select(docTitle) %>% 
+  distinct() %>%
+  pull(1,1) -> my_title
+
+my_play %>% 
+  select(year) %>% 
+  distinct() %>%
+  pull(1,1) -> my_year
+
+# Remember to count how many characters are on stage now
+(my_summary %>%
+  group_by(act_number, scene_number) %>%
+  mutate(total = sum(n_distinct(speaker))) -> my_summary) 
+
+# Let's plot it
+my_summary %>% 
+  ggplot(aes(y = speaker, x = scene_index, width = 100)) +
+    geom_tile(aes(fill = boolean_spoke, colour = speaker), colour = "grey", show.legend = FALSE) + 
+    geom_text(aes(label = "X")) +
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Who speaks when"
+    ) +
+  xlab("Act \nScene \nNumber of characters speaking in the scene") +
+  ylab("Speaker") + 
+  theme(axis.text.x=element_blank(), line = element_blank(), rect = element_blank()) + 
+  facet_grid(cols = vars("act_number" = act_number, "scene_number" = scene_number, "total" = total), switch="x")
+
+# And then we save the plot
+  ggsave(here("graphs/plots", paste(my_file, ".hvem_taler_hvornaar.pdf")), width=16, height=9)
+  
+
+```
+
+# Plotting who is present
+
+```{r}
+# First, let's read in the play again
+my_play <- read_play_jsonl(here("test-data", my_file))
+# And find out who is present but does not speak
+present_without_speech_numbers(my_play) %>%
+  # Add a scene index for the x-axis
+  rowwise() %>% 
+  mutate(scene_index = calc_scene_index(act_number, scene_number, act_length)) %>%
+  # Add a boolean to denote who is present
+    mutate(boolean_spoke = "S") %>%
+  select(-index) -> present_silent 
+
+# Combine those who speak with those are present
+my_summary %>%
+    select(-total) %>%
+  full_join(present_silent, 
+            by = c("speaker"="word", "act_number", "scene_number", "scene_index", "boolean_spoke")) -> new_summary
+
+# Remember to count how many characters are on stage now
+(new_summary %>%
+  group_by(act_number, scene_number) %>%
+  mutate(total = sum(n_distinct(speaker))) -> new_summary) 
+
+new_summary %>% 
+  ggplot(aes(y = speaker, x = scene_index, width = 100)) +
+    geom_tile(aes(fill = boolean_spoke, colour = speaker), colour = "grey", show.legend = FALSE) + 
+    geom_text(aes(label = boolean_spoke)) +
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Who is present"
+    ) +
+  xlab("Act \nScene \nNumber of characters in the scene") +
+  ylab("Speaker") + 
+  theme(axis.text.x=element_blank(), line = element_blank(), rect = element_blank()) + 
+  facet_grid(cols = vars("act_number" = act_number, "scene_number" = scene_number, "total" = total), switch = "x")
+
+  #ggsave(here("graphs/plots", paste(my_file, ".hvem_til_stede.pdf")), width=16, height=9)
+
+```
+
+# Plotting who is spoken of
+
+We want to know which characters are spoken of, even if they themselves are not present in the scene.
+First we need to define what we mean by being "spoken about". We might find characters who are designated as "not present", while being mentioned in the speech of another character. So if a character is mentioned while not being present in the scene, the character is "spoken about".
+
+Below we will find these characters and can add this data to the above plot.
+
+```{r}
+source(here("src", "omtale.R"))
+(spoken_about(my_play) %>%
+  # Add a scene index for the x-axis
+  rowwise() %>% 
+  mutate(scene_index = calc_scene_index(act_number, scene_number, act_length)) %>%
+  # Add a boolean for "spoken about"
+    mutate(boolean_spoke = "O") %>%
+  select(-index)
+  -> spoken_about_summary) 
+
+new_summary %>%
+    select(-total) %>%
+  full_join(spoken_about_summary, by = c("speaker"="word", "act_number", "scene_number", "scene_index", "boolean_spoke")) %>% 
+  ggplot(aes(y = speaker, x = scene_index, width = 100)) +
+    geom_tile(aes(fill = boolean_spoke, colour = speaker), colour = "grey", show.legend = FALSE) + 
+    geom_text(aes(label = boolean_spoke)) +
+    labs(
+      title = paste(my_title, my_year, my_file),
+      subtitle = "Who is present and who is spoken about"
+    ) +
+  xlab("Act \nScene") +
+  ylab("Speaker") + 
+  theme(axis.text.x=element_blank(), line = element_blank(), rect = element_blank()) + 
+  facet_grid(cols = vars("act_number" = act_number, "scene_number" = scene_number), switch = "x")
+
+  #ggsave(here("graphs/plots", paste(my_file, ".hvem_til_stede_hvem_omtalt.pdf")), width=16, height=9)
+
+```
+
+# Let's apply these functions to all plays
+
+Let's first test this on a single play.
+
+```{r}
+source(here("src", "plot_func.R"))
+
+my_file <- "Mascarade_mod.jsonl"
+plot_all(my_file)
+
+```
+
+And now on all plays
+
+```{r}
+source(here("src", "plot_func.R"))
+# Get all files in the JSONL format
+json_file_list <- list.files(here("test-data"), pattern = "*.jsonl")
+# Get plots for all plays
+for(i in 2:length(json_file_list)) {
+  plot_all(json_file_list[i])
+  print(paste("plotting play nr.",i+1,"of",length(json_file_list)))
+}
+
+```
+

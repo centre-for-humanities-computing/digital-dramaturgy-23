@@ -1,0 +1,158 @@
+---
+title: "Hvem er til stede uden replikker?"
+output: html_notebook
+author: baj
+---
+
+# Bestemmelse af hvem der ikke siger noget men er tilstede 
+
+Dette gøres ud fra regi-bemærkninger 
+
+
+Before we start, we need to load the needed R packages
+
+```{r, message=FALSE}
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+#library(xslt)
+library(readxl)
+library(tidytext)
+```
+
+We also need to load the functions created for this project. This is done by `source`-ing them.
+
+```{r}
+source(here("src", "p017-functions.R"))
+source(here("src", "present_without_speech.R"))
+```
+
+# Read play
+
+(Look at read-plays.Rmd for help)
+In this example I use "Barselstuen_mod_nc.page"
+You can choose any play, you would like to.
+Create a "test-data" folder in your project directory, and copy the play here.
+Edit the file below to the jsonl file for the play you want.
+
+```{r}
+my_file <- "Mascarade_mod.jsonl"
+# convert all page files in the specified folder to jsonl
+# convert_TEI_to_JSONL(here("test-data")) 
+# read the specified play from the jsonl file
+play <- read_play_jsonl(here("test-data", my_file))
+play # show the table for the play
+
+# husk excel ark med navnevarianter!
+# Indlæs Excelarket
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+    mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant)
+    )
+# Benyt excelark til at samle varianter
+play %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker)) %>%
+  filter(!is.na(speaker), !(speaker=="")) %>%
+  distinct -> play
+```
+Play is now the play in question. This way, you can just change that and rerun all the sections below, without having to change them.
+
+# Find speakers
+
+Find all designated speakers
+```{r}
+(play %>%
+  filter(!is.na(speaker)) %>% 
+  count(speaker) %>%
+  # mutate(speaker = str_to_lower(speaker)) %>%
+  select(speaker) -> speakers)
+```
+
+# Find alle regi-bemærkninger. 
+De findes i <stage> og <speaker_stage>.
+
+```{r}
+
+# These are the people who are directly mentioned in the stage tokens
+(play %>% 
+  filter(!is.na(stage)) %>%
+  filter(!startsWith(stage, "("))  %>% 
+  unnest_tokens(word, stage, drop=FALSE, token="regex", pattern = ", *") %>% #tokenize stage
+  select(act, scene, index, word) %>% 
+  distinct() -> explicit_stage_tokens)
+  
+# These are the the actors who are implicitly mentioned in stage tokens
+(play %>% 
+  filter(!is.na(stage)) %>%
+  filter(startsWith(stage, "("))  %>% 
+  unnest_tokens(word, stage) %>% #tokenize stage
+  select(act, scene, index, word) %>% 
+  distinct() -> implicit_stage_tokens)
+  
+# These are the the actors who are implicitly mentioned in speaker stage tokens
+(play %>% 
+  unnest_tokens(word, speaker_stage) %>% #tokenize speaker stage
+  filter(!is.na(word)) %>%
+  select(act, scene, index, word) -> speaker_stage_tokens)
+```
+
+# Search for speakers in instructions
+```{r}
+(explicit_stage_tokens %>%
+  semi_join(speakers, by = c("word" = "speaker")) -> explicit_speakers_in_stage)
+
+(implicit_stage_tokens %>%
+  semi_join(speakers, by = c("word" = "speaker")) -> implicit_speakers_in_stage)
+
+(speaker_stage_tokens %>%
+  semi_join(speakers, by = c("word" = "speaker")) -> speakers_in_speaker_stage)
+
+
+(explicit_speakers_in_stage %>%
+    full_join(implicit_speakers_in_stage) %>% 
+    full_join(speakers_in_speaker_stage) -> all_speakers_in_stage)
+
+```
+Ovenstående må betyde at vi har 101 steder, hvor en speaker er nævnt i en regi-bemærkning.
+Altså ud fra den liste af speakers, som vi véd er med stykket. 
+
+# Remove the characters, that are actually speaking?!
+```{r}
+         
+## Distinct speakers in each scene in each act   
+(play %>% 
+  filter(!is.na(speaker)) %>%
+  select(act, scene, speaker) %>%
+  mutate(speaker = str_to_lower(speaker)) %>%
+  distinct() -> distinct_speakers)
+
+## Filter out speakers from words grouped by act and scene!
+all_speakers_in_stage %>%
+  anti_join(distinct_speakers, by=c("act"="act", "scene"="scene", "word"="speaker")) %>% 
+  distinct()
+
+```
+Så er der 18 steder med personer omtalt i regibemærkninger, men ikke som speaker i den scene.
+Skal vi lige checke om det nu kan passe?
+Anden akt, Scene 1 har <speaker>En pige <stage>(med en tallerken)</stage></speaker>.
+Vores algoritme kan ikke se at "pigen" i <stage> bemærkningen er den samme som "En pige" i <speaker>...
+vi har testet den på Barselstuen, for der ved vi, at vi skal finde Corfitz under sengen i akt 2, scene 2, så den er god nok. Det er dog nok nødvendigt at gå den igennem manuelt for at rette til, som for eksempel med "pigen".
+
+Hvis det skal bruges i grafen, skal vi nok lave det hele til en funktion.
+
+Så kan vi også prøve funktionen på et andet skuespil, og måske få et andet resultat?!
+
+# Test Function
+```{r}
+# genindlæs skuespil, for så virker det!
+play <- read_play_jsonl(here("test-data", my_file))
+present_without_speech(play)
+```
+
+Ok, funktionen ser ud til at virke, så prøver vi at putte det ind i netværksgrafen.
+

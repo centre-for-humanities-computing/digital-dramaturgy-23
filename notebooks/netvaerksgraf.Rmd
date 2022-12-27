@@ -1,0 +1,245 @@
+---
+title: "Netværksgraf"
+output: html_notebook
+author: baj
+---
+
+# Netværk
+Opdel alle på titel, akt og scene.
+Vi vil gerne nå frem til en grafisk fremstilling af netværk.
+
+5. Find karakterer med replikker, der taler med hinanden – hele stykket.
+   a. Graduer efter, hvor mange ord, de siger til hinanden.
+   b. Talende karakter: det skal visuelt fremgå, dvs hvem der taler mest.
+6. Find karakterer, der taler med hinanden – opdelt i akt og scene.
+   a. Graduer efter, hvor mange ord, de siger til hinanden.
+
+Jf Frank Fischer – “taler med hinanden” defineres som karakterer, der taler i en scene. Moretti – definerer ift karakterer, der taler efter hinanden. Vi starter med Fischer.
+
+Before we start, we need to load the needed R packages
+
+HUSK første gang
+install.packages("tidytext")
+
+
+```{r, message=FALSE}
+library(here)
+library(xml2)
+library(tidyverse)
+library(ndjson)
+library(here)
+library(fs)
+library(xslt)
+library(tidytext)
+library(ggraph)
+library(igraph)
+library(tidygraph)
+```
+
+We also need to load the functions created for this project. This is done by `source`-ing them.
+
+```{r}
+source(here("src", "p017-functions.R"))
+```
+
+
+# Vi starter med et eksempel...
+
+```{r}
+
+## A simple example with a couple of actors
+## The typical case is that these tables are read in from files....
+actors <- data.frame(name=c("Alice", "Bob", "Cecil", "David",
+                            "Esmeralda"))
+relations <- data.frame(from=c("Bob", "Cecil", "Cecil", "David", "David", "Esmeralda"),
+                        to=c("Alice", "Bob", "Alice", "Alice", "Bob", "Alice"))
+g <- graph_from_data_frame(relations, directed=TRUE, vertices=actors)
+print(g, e=TRUE, v=TRUE)
+
+t <- tbl_graph(nodes = actors, edges = relations, directed = TRUE, node_key = "name")
+
+ggraph(t, layout = 'randomly') + 
+    geom_edge_link(aes(start_cap = label_rect(node1.name),
+                       end_cap = label_rect(node2.name))) + 
+      geom_node_text(aes(label = name))
+
+```
+
+# Read plays
+
+(Look at read-plays.Rmd for help)
+
+```{r}
+here()
+#convert_TEI_to_JSONL(here("test-data"))
+plays <- read_plays_jsonl(here("test-data"))
+```
+
+# Find Nodes (speakers)
+We look at one play at a time.
+
+```{r}
+my_dir <-"test-data"
+my_play <- "Hexerie_mod.jsonl"
+read_play_jsonl(here(my_dir, my_play)) -> play
+play #se den tbl, der nu er læst ind i play
+
+## Distinct speakers in each scene in each act grouped by act and scene
+(play %>%
+  filter(!is.na(speaker)) %>%
+   filter(!(speaker == "")) %>%
+  select(speaker, act_number, scene_number) %>% 
+     group_by(act_number, scene_number)  %>%
+   distinct() -> distinct_speakers_play)
+
+## Sammenlæg forskellige stavemåde af samme rolle
+(distinct_speakers_play %>%
+  # count all versions of Troels as one
+  mutate(
+    speaker = if_else(speaker %in% c("Troels", "Trols"), "Troels", speaker)) %>%
+  # count all versions of Barselskvinden as one
+  mutate(
+    speaker = if_else(speaker %in% c("Barselskonen", "Barselskvinden", "Barselsqvinde"), "Barselskvinden", speaker)) %>% 
+  # Count all versions of kællingen as one
+  mutate(
+    speaker = if_else(speaker %in% c("Kælling", "Kællingen"), "Kællingen", speaker)) %>% 
+  # Count all versions of Pigen as one
+  mutate(
+    speaker = if_else(speaker %in% c("En pige", "Pigen"), "Pigen", speaker)) %>%
+    # count all versions of Drengen as one
+  mutate(
+    speaker = if_else(speaker %in% c("Dreng", "Drengen", "En dreng"), "Drengen", speaker)) %>%
+  distinct(speaker) -> distinct_speakers_play)
+
+## All distinct speakers in play are the nodes
+(distinct_speakers_play %>%
+    ungroup() %>%
+    select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_play) # add id column
+
+```
+
+# Find Edges
+5. Find karakterer med replikker, der taler med hinanden – hele stykket.
+```{r}
+# we would like an edge-list like this
+# edge_list <- tibble(from = c("Claus", "Corfitz", "Jeronimus"), 
+#                    to = c("Troels", "Troels", "Corfitz"))
+
+## I.e. an edge for each pair of speakers in each scene in each act
+## That is every combination of speakers within each group
+
+#create column 'speaker2' and make it equal to 'speaker' (duplicate).
+distinct_speakers_play$speaker2 = distinct_speakers_play$speaker 
+# All possible combinations (remember the data is still grouped by act-number and scene-number)
+(distinct_speakers_play %>% 
+  expand(speaker, speaker2) -> who_speaks_to_whom)
+
+(who_speaks_to_whom  %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_play)
+
+```
+# Draw Graph
+
+```{r}
+# now we can draw a graph like this
+gr <- tbl_graph(nodes = nodes_play, edges = edges_play, directed = TRUE, node_key = "speaker")
+
+
+ggraph(gr, layout = 'kk') + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = paste("Netværksgraf", my_play))
+
+```
+
+# Graduer efter, hvor mange ord, de siger til hinanden.
+Vi kan låne lidt fra "visualisering-ord-sagt.Rmd"
+
+```{r}
+play %>%
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  select(n_spoken_words, speaker, act_number, scene_number)
+```
+WORK IN PROGRESS
+
+# TODO b. Talende karakter: det skal visuelt fremgå, dvs hvem der taler mest.
+# TODO Nu kommer alt det spændende arbejde med at gøre grafen pæn :)
+# TODO Til stede, men taler ikke, skal være kanter med en anden farve.
+
+
+
+Vi kan også prøve at lave grafer for hver scene eller hver akt i stykket...
+# 6. Find karakterer, der taler med hinanden – opdelt i akt og scene.
+
+```{r}
+## Første Akt
+distinct_speakers_play %>%
+  filter(act_number == 1) %>%
+  select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_act1
+
+who_speaks_to_whom %>%
+  filter(act_number == 1) %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_act1
+
+gr <- tbl_graph(nodes = nodes_act1, edges = edges_act1, directed = TRUE, node_key = "speaker")
+
+ggraph(gr) + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = "Netværksgraf Barselstuen Første Akt")
+
+## Andet Akt
+distinct_speakers_play %>%
+  filter(act_number == 2) %>%
+  select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_act2
+
+who_speaks_to_whom %>%
+  filter(act_number == 2) %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_act2
+
+gr <- tbl_graph(nodes = nodes_act2, edges = edges_act2, directed = TRUE, node_key = "speaker")
+
+ggraph(gr) +     ungroup() %>%
+
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = "Netværksgraf Barselstuen Andet Akt")
+
+## Tredje Akt
+distinct_speakers_play %>%
+  filter(act_number == 3) %>%
+  select(speaker) %>%
+     distinct() %>% 
+   rowid_to_column("id") -> nodes_act3
+
+who_speaks_to_whom %>%
+  filter(act_number == 3) %>%
+  ungroup() %>%
+  select(from = speaker, to = speaker2) %>%
+  distinct() -> edges_act3
+
+gr <- tbl_graph(nodes = nodes_act3, edges = edges_act3, directed = TRUE, node_key = "speaker")
+
+ggraph(gr) + 
+    geom_edge_link(aes(start_cap = label_rect(node1.speaker),
+                       end_cap = label_rect(node2.speaker))) + 
+      geom_node_text(aes(label = speaker)) + 
+    labs(caption = "Netværksgraf Barselstuen Tredje Akt")
+
+```
+

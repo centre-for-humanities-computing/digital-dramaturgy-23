@@ -1,0 +1,350 @@
+---
+title: "Visualizing percentages of spoken words across scenes and plays"
+output: html_notebook
+author: db
+---
+
+Loading required libraries and functions.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(here)
+library(ndjson)
+#library(xslt)
+library(fs)
+library(ggplot2)
+
+require(readr)  # For read_csv()
+require(purrr)  # For map(), reduce()
+
+source(here("src/p017-functions.R"))
+```
+
+One of the P017 functions is used to load all plays by Holberg, located in the `test-data`-folder, into a table called allplays. Then, characters, that are referred to with their alias, are renamed to their main name.
+
+```{r}
+allplays <- read_plays_jsonl(here("test-data")) %>% 
+  # Add column containing both tidy title and year
+  mutate(title_year = paste0(title, " ", year))
+
+# Load excel sheet with name variants
+variants <- read_excel(here("Rolleliste.xlsx")) %>% 
+  unnest_tokens(variant, Alias, token = "regex", pattern = ", ") %>% 
+  mutate(
+      Karakter = tolower(Karakter),
+      variant = tolower(variant))
+
+# Use the variants object to rename certain speakers in allplays
+allplays <- allplays %>%
+  mutate(speaker = tolower(speaker)) %>% 
+  left_join(variants, by = c("filename"="Filnavn", "speaker"="variant")) %>% 
+  mutate(speaker = if_else(!is.na(Karakter), Karakter, speaker))
+
+```
+
+Groups of interest are set and colors are assigned. You can find the hex code of colors by searching on "color picker" in Google.
+
+```{r}
+group1 <- c("henrik", "jens")
+color1 <- "#2CB6DF" 
+group2 <- c("barselskvinden")
+color2 <- "#CF4426"
+group3 <- c("jacob")
+color3 <- "#672e99"
+group4 <- c()
+color4 <- NA
+group5 <- c()
+color5 <- NA
+group6 <- c()
+color6 <- NA
+group7 <- c()
+color7 <- NA
+group8 <- c()
+color8 <- NA
+group9 <- c()
+color9 <- NA
+group10 <- c()
+color10 <- NA
+group11 <- c()
+color11 <- NA
+group12 <- c()
+color12 <- NA
+
+
+# Combine the speakers into a vector
+my_speakers <- c(group1, group2, group3, group4, group5, group6, group7, group8, group9, group10, group11, group12)
+
+my_colors <- c(color1, color2, color3, color4, color5, color6, color6, color8, color9, color10, color11, color12) %>% na.omit()
+
+my_plays <- unique(allplays$docTitle[allplays$speaker %in% my_speakers])
+```
+
+A table is prepared for plotting.
+
+```{r}
+df <- allplays %>% 
+  
+  # Remove rows that are not dialogue
+  filter(act != "", scene != "", speaker != "", !is.na(speaker), !is.na(spoke)) %>%
+  
+  # Keep only plays of interest
+  filter(docTitle %in% my_plays) %>% 
+  
+  # Add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  
+  # Organize dataset by grouping
+  group_by(year, title_year, act_number, scene_number, speaker) %>% 
+  
+  # Sum the words spoken by each speaker
+  summarise(words = sum(n_spoken_words))
+
+# Find highest number of scenes within each act for use in the plot  
+intercepts <- df %>% group_by(act_number) %>% 
+  summarise(max_scene = max(scene_number)) %>% 
+  mutate(intercepts = cumsum(max_scene+c(0.5,rep(0,length(act_number)-1)))) %>%
+  pull(intercepts)
+
+# Make order of plays chronological   
+play_chronology <- unique(df$title_year)
+df$title_year <- factor(df$title_year, levels = play_chronology)
+  
+df <- df %>%   
+  # Calculate percentage of words spoken in each scene
+  group_by(title_year, act_number, scene_number) %>% 
+  mutate(percent = 100*(words/sum(words))) %>% ungroup() %>% 
+
+  # Add act:scene column
+  mutate(act_scene = paste0(act_number, ":", str_pad(scene_number, 2, pad = "0")))
+
+# Make group names into text that can be showed in the plot legend
+for (i in 1:12){
+  text <- paste(eval(parse(text = paste0("group", i))), collapse = ", ")
+  assign(paste0("group", i, "text"), text)
+}
+
+# Make a column that indicates group
+df$group <- "other"
+
+for (i in 1:12){
+  df$group <- ifelse(df$speaker %in% eval(parse(text = paste0("group", i))) & df$group=="other", eval(parse(text = paste0("group", i, "text"))), df$group)
+}
+
+groups_used <- c(group12text, group11text, group10text, group9text, group8text, group7text, group6text, group5text, group4text, group3text, group2text, group1text) %>% as_tibble() %>% filter(value != "") %>% pull(value)
+  
+df$group <- factor(df$group, levels = c("other", groups_used))
+  
+# If two characters from the same group speak in the same scene, their percentages should be added
+df <- df %>% group_by(title_year, act_scene, group) %>% 
+   summarise(percent_sum = sum(percent))
+
+```
+
+```{r}
+  ggplot(df, aes(fill = group, y = percent_sum, x = act_scene)) +
+    geom_bar(stat="identity") +
+  scale_fill_manual(breaks = c(groups_used[length(groups_used):1], "other"), 
+                    values = c(my_colors, "grey")) +
+  xlab("Act:Scene") +
+  ylab("Percentage of spoken words") +
+  facet_grid(rows = vars("title_year" = title_year), 
+             switch = "x") +
+  scale_y_continuous(breaks = c(0, 50, 100)) +
+  geom_vline(xintercept = intercepts, size = 0.2) +
+  theme_bw() +
+  theme(legend.position = "bottom", 
+          legend.title = element_blank(), 
+          axis.text.x = element_text(angle = 90, size = 6, hjust = 0, vjust = 0.5),
+          axis.text.y = element_text(size = 4),
+          strip.text.y = element_text(angle = 0, hjust = 0))
+```
+
+
+Make a plot like the one above, but now it shows percentage of words spoken in the whole play and not just one particular scene. A df is prepared again, and the plot is drawn.
+
+```{r}
+df <- allplays %>% 
+  
+  # Remove rows that are not dialogue
+  filter(act != "", scene != "", speaker != "", !is.na(speaker), !is.na(spoke)) %>%
+  
+  # Keep only plays of interest
+  filter(docTitle %in% my_plays) %>% 
+  
+  # Add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  
+  # Organize dataset by grouping
+  group_by(year, title_year, act_number, scene_number, speaker) %>% 
+  
+  # Sum the words spoken by each speaker
+  summarise(words = sum(n_spoken_words))
+
+# Find highest number of scenes within each act for use in the plot  
+intercepts <- df %>% group_by(act_number) %>% 
+  summarise(max_scene = max(scene_number)) %>% 
+  mutate(intercepts = cumsum(max_scene+c(0.5,rep(0,length(act_number)-1)))) %>%
+  pull(intercepts)
+
+# Make order of plays chronological   
+play_chronology <- unique(df$title_year)
+df$title_year <- factor(df$title_year, levels = play_chronology)
+  
+df <- df %>%   
+  # Calculate percentage of words spoken in each scene
+  group_by(title_year) %>% mutate(percent = 100*(words/sum(words))) %>% ungroup() %>% 
+
+  # Add act:scene column
+  mutate(act_scene = paste0(act_number, ":", str_pad(scene_number, 2, pad = "0")))
+
+# Make group names into text that can be showed in the plot legend
+for (i in 1:12){
+  text <- paste(eval(parse(text = paste0("group", i))), collapse = ", ")
+  assign(paste0("group", i, "text"), text)
+}
+
+# Make a column that indicates group
+df$group <- "other"
+
+for (i in 1:12){
+  df$group <- ifelse(df$speaker %in% eval(parse(text = paste0("group", i))) & df$group=="other", eval(parse(text = paste0("group", i, "text"))), df$group)
+}
+
+groups_used <- c(group12text, group11text, group10text, group9text, group8text, group7text, group6text, group5text, group4text, group3text, group2text, group1text) %>% as_tibble() %>% filter(value != "") %>% pull(value)
+  
+df$group <- factor(df$group, levels = c("other", groups_used))
+  
+# If two characters from the same group speak in the same scene, their percentages should be added
+df <- df %>% group_by(title_year, act_scene, group) %>% 
+   summarise(percent_sum = sum(percent))
+
+# PLOTTING
+ggplot(df, aes(fill = group, y = percent_sum, x = act_scene)) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(breaks = c(groups_used[length(groups_used):1], "other"), 
+                    values = c(my_colors, "grey")) +
+  xlab("Act:Scene") +
+  ylab("Percentage of spoken words") +
+  facet_grid(rows = vars("title_year" = title_year), 
+             switch = "x", scales = "free_y") +
+  #scale_y_continuous(breaks = c(0, 50, 100)) +
+  geom_vline(xintercept = intercepts, size = 0.2) +
+  theme_bw() +
+  theme(legend.position = "bottom", 
+          legend.title = element_blank(), 
+          axis.text.x = element_text(angle = 90, size = 6, hjust = 0, vjust = 0.5),
+          axis.text.y = element_text(size = 4),
+          strip.text.y = element_text(angle = 0, hjust = 0))
+
+```
+
+Make a plot like the one above but now, the group "other" differentiates between social classes. This requires the social class data to be combined with allplays before hand.
+
+```{r}
+# Load social class data
+social <- read_excel(here("gender AND Mask_alaw sammenlagte karakterer reduceret i kategoriantal.xlsx"))
+social <- unite(data = social, col = "social_status", "social status, main character", "social status, other characters", sep="", na.rm = TRUE) %>% 
+  mutate(social_status = gsub("^NA", "", social_status)) %>% 
+  mutate(social_status = gsub("NA$", "", social_status))
+
+# Combine with allplays
+allplays <- allplays %>%
+  mutate(docTitle = tolower(docTitle)) %>% 
+  left_join(social[,c(1,2,7)], by = c("docTitle"="play", "speaker"="speaker"))
+
+# Decapitalize my_plays
+my_plays <- unique(allplays$docTitle[allplays$speaker %in% my_speakers])
+
+# PREPARE THE TABLE
+df <- allplays %>% 
+  
+  # Remove rows that are not dialogue
+  filter(act != "", scene != "", speaker != "", !is.na(speaker), !is.na(spoke)) %>%
+  
+  # Keep only plays of interest
+  filter(docTitle %in% my_plays) %>% 
+  
+  # Add the number of spoken words
+  mutate(n_spoken_words = str_count(spoke, '\\w+')) %>% 
+  
+  # Organize dataset by grouping
+  group_by(year, title_year, act_number, scene_number, speaker, social_status) %>% 
+  
+  # Sum the words spoken by each speaker
+  summarise(words = sum(n_spoken_words))
+
+# Find highest number of scenes within each act for use in the plot  
+intercepts <- df %>% group_by(act_number) %>% 
+  summarise(max_scene = max(scene_number)) %>% 
+  mutate(intercepts = cumsum(max_scene+c(0.5,rep(0,length(act_number)-1)))) %>%
+  pull(intercepts)
+
+# Make order of plays chronological   
+play_chronology <- unique(df$title_year)
+df$title_year <- factor(df$title_year, levels = play_chronology)
+  
+df <- df %>%   
+  # Calculate percentage of words spoken in each scene
+  group_by(title_year) %>% mutate(percent = 100*(words/sum(words))) %>% ungroup() %>% 
+
+  # Add act:scene column
+  mutate(act_scene = paste0(act_number, ":", str_pad(scene_number, 2, pad = "0")))
+
+# Make group names into text that can be showed in the plot legend
+for (i in 1:12){
+  text <- paste(eval(parse(text = paste0("group", i))), collapse = ", ")
+  assign(paste0("group", i, "text"), text)
+}
+
+# Make a column that indicates group
+df$group <- ifelse(df$social_status=="", "Unknown", df$social_status)
+statuses <- unique(df$social_status)
+
+for (i in 1:12){
+  df$group <- ifelse(df$speaker %in% eval(parse(text = paste0("group", i))) & df$social_status %in% statuses, eval(parse(text = paste0("group", i, "text"))), df$group)
+}
+
+groups_used <- c(group12text, group11text, group10text, group9text, group8text, group7text, group6text, group5text, group4text, group3text, group2text, group1text) %>% as_tibble() %>% filter(value != "") %>% pull(value)
+
+statuses_used <- unique(df$group[!df$group %in% groups_used])
+  
+df$group <- factor(df$group, levels = c(statuses_used, groups_used))
+  
+# If two characters from the same group speak in the same scene, their percentages should be added
+df <- df %>% group_by(title_year, act_scene, group) %>% 
+   summarise(percent_sum = sum(percent))
+
+# PLOTTING
+library(colorspace)
+
+ggplot(df, aes(fill = group, y = percent_sum, x = act_scene)) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(breaks = c(groups_used[length(groups_used):1], statuses_used), 
+                    values = c(my_colors, qualitative_hcl(length(statuses_used), palette = "Set 3"))) +
+  xlab("Act:Scene") +
+  ylab("Percentage of spoken words") +
+  facet_grid(rows = vars("title_year" = title_year), 
+             switch = "x", scales = "free_y") +
+  #scale_y_continuous(breaks = c(0, 50, 100)) +
+  geom_vline(xintercept = intercepts, size = 0.2) +
+  theme_bw() +
+  theme(legend.position = "bottom", 
+          legend.title = element_blank(), 
+          axis.text.x = element_text(angle = 90, size = 6, hjust = 0, vjust = 0.5),
+          axis.text.y = element_text(size = 4),
+          strip.text.y = element_text(angle = 0, hjust = 0))
+
+```
+
+The code making the two plots above has been gathered in two different functions.
+
+```{r}
+source(here("src", "percent-speech-functions.R"))
+
+percentage_plot(group1 = "leander", group2 = c("pernille", "barselskvinden"), color1 = "#2CB6DF", color2 = "#CF4426")
+
+percentage_plot_status(group1 = "leander", group2 = c("pernille", "barselskvinden"), color1 = "#2CB6DF", color2 = "#CF4426")
+```
+
