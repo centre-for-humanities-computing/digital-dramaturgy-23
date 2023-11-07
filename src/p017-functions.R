@@ -15,7 +15,7 @@ convert_TEI_to_JSONL <- function(folder) {
   # convert all .page files in the "test-data/tei" directory to JSONL files
   dir_walk(
     folder,
-    function(filename) if (str_ends(filename,".page")) filename %>%
+    function(filename) if (str_detect(filename, "\\.page$|\\.xml$")) filename %>%
       read_xml() %>%
       xml_xslt(stripSeqXSL) %>%
       xml_xslt(tei2jsonlXSL) %>%
